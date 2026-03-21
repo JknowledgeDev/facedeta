@@ -1,0 +1,117 @@
+import { createClient } from '@supabase/supabase-js'
+
+export interface FaceIndexRow {
+  id: string
+  face_id: string
+  drive_file_id: string
+  file_name: string | null
+  event_name: string | null
+  event_date: string | null
+  thumbnail_url: string | null
+  uploaded_at: string
+}
+
+export interface SearchResult extends FaceIndexRow {
+  confidence: number
+  view_url: string
+}
+
+// Server-side client (ใช้ service role key)
+export function getSupabaseAdmin() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  )
+}
+
+// Client-side client (ใช้ anon key)
+export function getSupabaseClient() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  )
+}
+
+// บันทึก face mapping หลังจาก IndexFaces สำเร็จ
+export async function saveFaceMapping(data: {
+  faceId: string
+  driveFileId: string
+  fileName?: string
+  eventName?: string
+  eventDate?: string
+  thumbnailUrl?: string
+}): Promise<void> {
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase.from('face_index').upsert(
+    {
+      face_id: data.faceId,
+      drive_file_id: data.driveFileId,
+      file_name: data.fileName ?? null,
+      event_name: data.eventName ?? null,
+      event_date: data.eventDate ?? null,
+      thumbnail_url: data.thumbnailUrl ?? null,
+    },
+    { onConflict: 'face_id' }
+  )
+  if (error) throw new Error(`Supabase saveFaceMapping: ${error.message}`)
+}
+
+// ค้นหา records จาก faceIds ที่ได้จาก Rekognition
+export async function getFaceRecordsByIds(faceIds: string[]): Promise<FaceIndexRow[]> {
+  if (faceIds.length === 0) return []
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('face_index')
+    .select('*')
+    .in('face_id', faceIds)
+
+  if (error) throw new Error(`Supabase getFaceRecordsByIds: ${error.message}`)
+  return data ?? []
+}
+
+// ตรวจว่า driveFileId ถูก index แล้วหรือยัง
+export async function isFileIndexed(driveFileId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin()
+  const { count } = await supabase
+    .from('face_index')
+    .select('*', { count: 'exact', head: true })
+    .eq('drive_file_id', driveFileId)
+
+  return (count ?? 0) > 0
+}
+
+// ลบ records ของ driveFileId
+export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<string[]> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('face_index')
+    .delete()
+    .eq('drive_file_id', driveFileId)
+    .select('face_id')
+
+  if (error) throw new Error(`Supabase deleteFaceMappings: ${error.message}`)
+  return (data ?? []).map((r: { face_id: string }) => r.face_id)
+}
+
+// บันทึก search log
+export async function logSearch(matchCount: number, threshold: number): Promise<void> {
+  const supabase = getSupabaseAdmin()
+  await supabase.from('search_log').insert({ match_count: matchCount, threshold })
+}
+
+// ดึงสถิติ
+export async function getStats(): Promise<{
+  totalFaces: number
+  totalPhotos: number
+  totalEvents: number
+  totalSearches: number
+}> {
+  const supabase = getSupabaseAdmin()
+  const { data } = await supabase.from('stats').select('*').single()
+  return {
+    totalFaces: data?.total_faces_indexed ?? 0,
+    totalPhotos: data?.total_photos ?? 0,
+    totalEvents: data?.total_events ?? 0,
+    totalSearches: data?.total_searches ?? 0,
+  }
+}

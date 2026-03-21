@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(npm run:*)",
+      "Bash(git init:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__c1fc4002-5f49-5f9d-a4e5-93c4ef5d6a75__google_drive_search",
+      "WebFetch(domain:drive.google.com)",
+      "Bash(ls D:/Facedeta/*.json D:/Facedeta/*.html D:/Facedeta/*.ts D:/Facedeta/*.js)",
+      "Bash(node dist-server/index.js --check)"
+    ]
+  }
+}
