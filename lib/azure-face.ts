@@ -21,7 +21,7 @@ import {
   DeleteFacesCommand,
   ListFacesCommand,
 } from '@aws-sdk/client-rekognition'
-import { toJpegBuffer } from '@/lib/image-utils'
+import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
 
 const client = new RekognitionClient({
   region: process.env.AWS_REGION ?? 'ap-southeast-1',
@@ -77,8 +77,8 @@ export async function addFaceToList(
 ): Promise<AddFaceResult[]> {
   await ensureFaceList()
 
-  // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG ก่อนส่ง AWS
-  const jpegBuffer = await toJpegBuffer(imageBuffer)
+  // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG + บีบให้ต่ำกว่า AWS 5 MB limit
+  const jpegBuffer = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
 
   // ExternalImageId รองรับเฉพาะ [a-zA-Z0-9_.\-:] ความยาวไม่เกิน 255
   const externalImageId = userData
@@ -148,8 +148,8 @@ export async function searchFacesByImage(
   // สร้าง collection อัตโนมัติถ้ายังไม่มี
   await ensureFaceList()
 
-  // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG ก่อนส่ง AWS
-  const jpegBuffer = await toJpegBuffer(imageBuffer)
+  // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG + บีบให้ต่ำกว่า AWS 5 MB limit
+  const jpegBuffer = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
 
   const response = await client.send(
     new SearchFacesByImageCommand({

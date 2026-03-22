@@ -1,5 +1,8 @@
 import sharp from 'sharp'
 
+/** AWS Rekognition hard limit สำหรับ image.bytes */
+export const AWS_MAX_BYTES = 5 * 1024 * 1024 // 5 MB = 5,242,880 bytes
+
 /**
  * ตรวจสอบว่าเป็น HEIC/HEIF จาก magic bytes
  */
@@ -22,10 +25,12 @@ function isHeicBuffer(buf: Buffer): boolean {
  * แปลงรูปทุกฟอร์แมต (รวมถึง HEIC/HEIF) → JPEG Buffer
  * - HEIC → heic-convert (pure JS)
  * - อื่นๆ  → sharp (auto-rotate + compress)
+ * - maxBytes > 0 → ลด quality ซ้ำจนต่ำกว่าขนาดที่กำหนด (สำหรับ AWS limit)
  */
 export async function toJpegBuffer(
   input: Buffer,
-  maxSize = 0   // 0 = ไม่ resize, >0 = จำกัด px longest side
+  maxSize = 0,    // 0 = ไม่ resize, >0 = จำกัด px longest side
+  maxBytes = 0    // 0 = ไม่จำกัด, >0 = บีบจนต่ำกว่า bytes ที่กำหนด
 ): Promise<Buffer> {
   let buf = input
 
@@ -36,14 +41,35 @@ export async function toJpegBuffer(
     buf = Buffer.from(ab)
   }
 
-  let pipeline = sharp(buf).rotate()
+  // เริ่มที่ 1920px + quality 85 (พอดีกับหน้า)
+  const dimension = maxSize > 0 ? maxSize : 1920
 
-  if (maxSize > 0) {
-    pipeline = pipeline.resize(maxSize, maxSize, {
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
+  let quality = 85
+  let result: Buffer
+
+  // วนลด quality จนต่ำกว่า maxBytes หรือถึง quality ต่ำสุด
+  while (true) {
+    result = await sharp(buf)
+      .rotate()
+      .resize(dimension, dimension, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality })
+      .toBuffer()
+
+    // ไม่มี limit หรือเล็กพอแล้ว → ออก
+    if (maxBytes <= 0 || result.length <= maxBytes) break
+
+    // ลด quality ลง 10 ต่อรอบ
+    quality -= 10
+    if (quality < 40) {
+      // ถ้า quality ต่ำมากแล้วแต่ยังใหญ่อยู่ → resize เพิ่มอีก
+      result = await sharp(buf)
+        .rotate()
+        .resize(1024, 1024, { fit: 'inside', withoutEnlargement: true })
+        .jpeg({ quality: 60 })
+        .toBuffer()
+      break
+    }
   }
 
-  return pipeline.jpeg({ quality: 85 }).toBuffer()
+  return result
 }
