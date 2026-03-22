@@ -3,35 +3,35 @@
 @tailwind utilities;
 
 body {
-  background-color: #f0f4ff;
+  background-color: #f0fdf4;
 }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(-6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
-.animate-fadeIn {
-  animation: fadeIn 0.2s ease-out;
-}
+.animate-fadeIn { animation: fadeIn 0.2s ease-out; }
 
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-
-.animate-slideUp {
-  animation: slideUp 0.3s ease-out;
-}
+.animate-slideUp { animation: slideUp 0.3s ease-out; }
 
 @keyframes skeleton-pulse {
   0%, 100% { opacity: 1; }
   50%       { opacity: 0.4; }
 }
+.animate-skeleton { animation: skeleton-pulse 1.5s ease-in-out infinite; }
 
-.animate-skeleton {
-  animation: skeleton-pulse 1.5s ease-in-out infinite;
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  20%       { transform: translateX(-10px); }
+  40%       { transform: translateX(10px); }
+  60%       { transform: translateX(-8px); }
+  80%       { transform: translateX(8px); }
 }
+.animate-shake { animation: shake 0.4s ease; }
 
 * {
   transition-property: color, background-color, border-color, box-shadow, opacity, transform;
