@@ -11,6 +11,60 @@ import { apiUrl } from '@/lib/api-url'
 
 type Status = 'idle' | 'searching' | 'done'
 
+// Vercel limits request body to ~4.5 MB — compress non-HEIC images in the browser first
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024 // 4 MB safe threshold
+
+async function compressIfNeeded(file: File): Promise<Blob> {
+  const isHeic = file.name.toLowerCase().endsWith('.heic') ||
+    file.name.toLowerCase().endsWith('.heif')
+
+  // HEIC: browser can't render it → send as-is (usually already <4 MB)
+  if (isHeic) return file
+
+  // Already small enough → send as-is
+  if (file.size <= MAX_UPLOAD_BYTES) return file
+
+  return new Promise((resolve) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      const canvas = document.createElement('canvas')
+
+      // Cap longest side at 1920 px to reduce size while keeping face detail
+      const MAX_DIM = 1920
+      let { width, height } = img
+      if (width > MAX_DIM || height > MAX_DIM) {
+        if (width >= height) { height = Math.round(height * MAX_DIM / width); width = MAX_DIM }
+        else { width = Math.round(width * MAX_DIM / height); height = MAX_DIM }
+      }
+
+      canvas.width = width
+      canvas.height = height
+      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
+
+      // Try quality 0.90 → 0.80 → ... until under limit
+      let quality = 0.9
+      const tryNext = () => {
+        canvas.toBlob((blob) => {
+          if (!blob) { resolve(file); return }
+          if (blob.size <= MAX_UPLOAD_BYTES || quality <= 0.5) {
+            resolve(blob)
+          } else {
+            quality = Math.round((quality - 0.1) * 10) / 10
+            tryNext()
+          }
+        }, 'image/jpeg', quality)
+      }
+      tryNext()
+    }
+
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
+    img.src = url
+  })
+}
+
 export default function SearchPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [threshold, setThreshold] = useState(75)
@@ -27,22 +81,35 @@ export default function SearchPage() {
     setResults([])
 
     try {
+      const compressed = await compressIfNeeded(selectedFile)
+
       const form = new FormData()
-      form.append('image', selectedFile)
+      form.append('image', compressed, selectedFile.name)
       form.append('threshold', String(threshold))
 
       const res = await fetch(apiUrl('/api/search'), { method: 'POST', body: form })
-      const data = await res.json()
 
-      if (!res.ok) throw new Error(data.error ?? 'Search failed')
+      // Guard against non-JSON responses (e.g. Vercel 413 plain-text body)
+      const text = await res.text()
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(text)
+      } catch {
+        if (res.status === 413 || text.includes('Entity Too Large') || text.includes('Request En')) {
+          throw new Error('ไฟล์ใหญ่เกินไป กรุณาใช้รูปที่มีขนาดเล็กกว่านี้')
+        }
+        throw new Error(`เกิดข้อผิดพลาด (${res.status})`)
+      }
 
-      setResults(data.results)
+      if (!res.ok) throw new Error((data.error as string) ?? 'Search failed')
+
+      setResults(data.results as SearchResult[])
       setStatus('done')
 
       if (data.total === 0) {
         toast('ไม่พบรูปภาพที่ตรงกัน ลองเปลี่ยนระดับการค้นหาดู', { icon: '🔍' })
       } else {
-        toast.success(`พบ ${data.total} รูปภาพ`)
+        toast.success(`พบ ${data.total as number} รูปภาพ`)
       }
     } catch (err: unknown) {
       setStatus('idle')
