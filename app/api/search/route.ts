@@ -24,8 +24,22 @@ export async function POST(req: NextRequest) {
 
     const imageBuffer = Buffer.from(await file.arrayBuffer())
 
-    // ค้นหาด้วย Azure Face API
-    const matches = await searchFacesByImage(imageBuffer, threshold)
+    // ค้นหาด้วย AWS Rekognition
+    const allMatches = await searchFacesByImage(imageBuffer, threshold)
+
+    /**
+     * กรองใบหน้าที่เล็กเกินไปในภาพต้นฉบับออก
+     * faceArea = Width × Height ของ BoundingBox (0–1)
+     * - ค้นหาทั่วไป  (threshold ≤ 65%) → min 0.2% (รับภาพกลุ่มหลวมๆ)
+     * - ค้นหาละเอียด (threshold ≤ 80%) → min 0.5% (น้องต้องเห็นชัดพอ)
+     * - ค้นหารายบุคคล (threshold > 80%) → min 1.0% (น้องต้องเป็นหลักในภาพ)
+     */
+    const minFaceArea =
+      thresholdPct <= 65 ? 0.002 :
+      thresholdPct <= 80 ? 0.005 :
+      0.01
+
+    const matches = allMatches.filter((m) => m.faceArea >= minFaceArea)
 
     if (matches.length === 0) {
       await logSearch(0, thresholdPct)

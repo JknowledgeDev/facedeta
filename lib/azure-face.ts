@@ -114,6 +114,8 @@ export interface DetectedFace {
 export interface SimilarFace {
   persistedFaceId: string
   confidence: number // 0–1
+  /** พื้นที่ใบหน้าในภาพต้นฉบับ (Width × Height ของ BoundingBox) — 0–1 */
+  faceArea: number
 }
 
 /**
@@ -166,10 +168,15 @@ export async function searchFacesByImage(
 
   return response.FaceMatches
     .filter((m) => m.Face?.FaceId && m.Similarity !== undefined)
-    .map((m) => ({
-      persistedFaceId: m.Face!.FaceId!,
-      confidence: (m.Similarity ?? 0) / 100, // แปลง 0–100 → 0–1
-    }))
+    .map((m) => {
+      const bb = m.Face?.BoundingBox
+      const faceArea = bb ? (bb.Width ?? 0) * (bb.Height ?? 0) : 0
+      return {
+        persistedFaceId: m.Face!.FaceId!,
+        confidence: (m.Similarity ?? 0) / 100, // แปลง 0–100 → 0–1
+        faceArea, // พื้นที่ใบหน้าใน Drive photo ต้นฉบับ (0–1)
+      }
+    })
 }
 
 /** ลบใบหน้าออกจาก Collection */
