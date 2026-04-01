@@ -208,7 +208,7 @@ export default function GalleryPage() {
       {/* Lightbox */}
       {lightbox && (
         <div
-          className="fixed inset-0 bg-black/92 z-50 flex items-center justify-center"
+          className="fixed inset-0 bg-black/75 backdrop-blur-md z-50 flex items-center justify-center"
           onClick={(e) => { if (e.target === e.currentTarget) setLightboxIdx(null) }}
         >
           {/* Prev button */}
