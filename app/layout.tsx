@@ -45,6 +45,16 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 <span className="hidden sm:inline">ค้นหารูป</span>
               </a>
 
+              <a href="/gallery"
+                className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-green-700
+                  px-3 py-2 rounded-lg hover:bg-green-50 font-medium transition-colors">
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909M3 21h18M3.75 3h16.5A.75.75 0 0121 3.75v13.5a.75.75 0 01-.75.75H3.75A.75.75 0 013 17.25V3.75A.75.75 0 013.75 3z" />
+                </svg>
+                <span className="hidden sm:inline">แกลเลอรี่</span>
+              </a>
+
               {/* Admin button → opens password modal */}
               <AdminModal />
             </div>
