@@ -40,7 +40,7 @@ export async function listImagesInFolder(
   const response = await drive.files.list({
     q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
     fields: 'nextPageToken, files(id, name, mimeType, createdTime, thumbnailLink, webViewLink)',
-    pageSize: 50,
+    pageSize: 100,
     pageToken,
     orderBy: 'createdTime desc',
   })
@@ -49,6 +49,27 @@ export async function listImagesInFolder(
     files: (response.data.files ?? []) as DriveFile[],
     nextPageToken: response.data.nextPageToken ?? undefined,
   }
+}
+
+/** นับรูปทั้งหมดในโฟลเดอร์ (ใช้ pageSize 1000 เพื่อความเร็ว) */
+export async function countImagesInFolder(folderId?: string): Promise<number> {
+  const drive = getDriveClient()
+  const targetFolder = folderId || FOLDER_ID
+  let total = 0
+  let pageToken: string | undefined
+
+  do {
+    const response = await drive.files.list({
+      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
+      fields: 'nextPageToken, files(id)',
+      pageSize: 1000,
+      pageToken,
+    })
+    total += (response.data.files ?? []).length
+    pageToken = response.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  return total
 }
 
 // ดาวน์โหลดรูปภาพเป็น Buffer
