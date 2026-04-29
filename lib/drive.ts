@@ -40,7 +40,7 @@ export async function listImagesInFolder(
   const response = await drive.files.list({
     q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
     fields: 'nextPageToken, files(id, name, mimeType, createdTime, thumbnailLink, webViewLink)',
-    pageSize: 100,
+    pageSize: 25,
     pageToken,
     orderBy: 'createdTime desc',
   })
