@@ -66,53 +66,86 @@ export async function POST(req: NextRequest) {
             continue
           }
 
-          try {
-            const buffer = await downloadFileAsBuffer(file.id)
-            const faceResults = await addFaceToList(buffer, file.id)
+          // ── retry แต่ละรูปสูงสุด 2 รอบ ──────────────────────────────
+          const MAX_FILE_RETRY = 2
+          let succeeded = false
 
-            if (faceResults.length === 0) {
-              countNoFace++
-              totalProcessed++
-              send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'no_face', ...stats() })
-              continue
-            }
+          for (let attempt = 1; attempt <= MAX_FILE_RETRY; attempt++) {
+            try {
+              // รอก่อน retry (ไม่รอรอบแรก)
+              if (attempt > 1) {
+                await new Promise(r => setTimeout(r, 3000 * attempt))
+              }
 
-            const viewUrl = getDriveViewUrl(file.id)
-            await Promise.all(
-              faceResults.map((f) =>
-                saveFaceMapping({
-                  faceId: f.persistedFaceId,
-                  driveFileId: file.id,
-                  fileName: file.name,
-                  eventName: eventName || undefined,
-                  eventDate: eventDate || undefined,
-                  thumbnailUrl: viewUrl,
-                })
+              const buffer = await downloadFileAsBuffer(file.id)
+              const faceResults = await addFaceToList(buffer, file.id)
+
+              if (faceResults.length === 0) {
+                countNoFace++
+                totalProcessed++
+                send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'no_face', ...stats() })
+                succeeded = true
+                break
+              }
+
+              const viewUrl = getDriveViewUrl(file.id)
+              await Promise.all(
+                faceResults.map((f) =>
+                  saveFaceMapping({
+                    faceId: f.persistedFaceId,
+                    driveFileId: file.id,
+                    fileName: file.name,
+                    eventName: eventName || undefined,
+                    eventDate: eventDate || undefined,
+                    thumbnailUrl: viewUrl,
+                  })
+                )
               )
-            )
 
-            totalFaces += faceResults.length
-            countIndexed++
-            totalProcessed++
-            send({
-              type: 'progress',
-              fileName: file.name,
-              fileId: file.id,
-              status: 'indexed',
-              facesIndexed: faceResults.length,
-              ...stats(),
-            })
-          } catch (err: unknown) {
-            countError++
-            totalProcessed++
-            send({
-              type: 'progress',
-              fileName: file.name,
-              fileId: file.id,
-              status: 'error',
-              errorMessage: err instanceof Error ? err.message : 'Unknown error',
-              ...stats(),
-            })
+              totalFaces += faceResults.length
+              countIndexed++
+              totalProcessed++
+              send({
+                type: 'progress',
+                fileName: file.name,
+                fileId: file.id,
+                status: 'indexed',
+                facesIndexed: faceResults.length,
+                ...stats(),
+              })
+              succeeded = true
+              break
+            } catch (err: unknown) {
+              const msg = err instanceof Error ? err.message : 'Unknown error'
+              if (attempt < MAX_FILE_RETRY) {
+                // ยังมี retry เหลือ → ส่ง event แจ้งแต่ยังไม่นับ error
+                send({
+                  type: 'progress',
+                  fileName: file.name,
+                  fileId: file.id,
+                  status: 'error',
+                  errorMessage: `[retry ${attempt}/${MAX_FILE_RETRY}] ${msg}`,
+                  ...stats(),
+                })
+              } else {
+                // หมด retry แล้ว → นับเป็น error จริง
+                countError++
+                totalProcessed++
+                send({
+                  type: 'progress',
+                  fileName: file.name,
+                  fileId: file.id,
+                  status: 'error',
+                  errorMessage: msg,
+                  ...stats(),
+                })
+              }
+            }
+          }
+
+          if (!succeeded) {
+            // ถึงแม้ retry ครบแล้ว ก็เดินต่อไปรูปถัดไป
+            continue
           }
         }
 
