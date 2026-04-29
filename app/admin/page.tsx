@@ -100,7 +100,7 @@ export default function AdminPage() {
     return total
   }, [folderId])
 
-  // ─── ขั้น 2: sync หน้าเดียว (SSE) พร้อม retry ─────────────────────
+  // ─── ขั้น 2: sync หน้าเดียว (SSE) ────────────────────────────────
   const syncPage = useCallback((
     pageToken: string | undefined,
     prev: Counters,
@@ -108,6 +108,9 @@ export default function AdminPage() {
   ): Promise<{ nextPageToken?: string; counters: Counters; stopped: boolean }> => {
     return new Promise(async (resolve, reject) => {
       let latest = { ...prev }
+      // ต้องได้รับ page-done หรือ done จาก server เท่านั้นถึงถือว่าสำเร็จ
+      let serverSignaled = false
+
       try {
         const res = await fetch(apiUrl('/api/sync-drive'), {
           method: 'POST',
@@ -162,20 +165,34 @@ export default function AdminPage() {
             if (ev.type === 'progress' && ev.fileName) {
               setCurrentFile(ev.fileName)
               if (ev.status && ev.status !== 'skipped') {
-                setLog(prev => [{
+                setLog(p => [{
                   fileName: ev.fileName!,
                   status: ev.status!,
                   facesIndexed: ev.facesIndexed,
                   error: ev.errorMessage,
-                }, ...prev].slice(0, 300))
+                }, ...p].slice(0, 300))
               }
             }
 
-            if (ev.type === 'page-done') { resolve({ nextPageToken: ev.nextPageToken, counters: latest, stopped: false }); return }
-            if (ev.type === 'done') { resolve({ counters: latest, stopped: false }); return }
+            if (ev.type === 'page-done') {
+              serverSignaled = true
+              resolve({ nextPageToken: ev.nextPageToken, counters: latest, stopped: false })
+              return
+            }
+            if (ev.type === 'done') {
+              serverSignaled = true
+              resolve({ counters: latest, stopped: false })
+              return
+            }
           }
         }
-        resolve({ counters: latest, stopped: false })
+
+        // stream จบโดยไม่มี signal จาก server → network ขาด → throw เพื่อให้ retry
+        if (!serverSignaled) {
+          reject(new Error('Stream ended unexpectedly — will retry'))
+        } else {
+          resolve({ counters: latest, stopped: false })
+        }
       } catch (err: unknown) {
         if ((err as Error).name === 'AbortError') {
           resolve({ counters: latest, stopped: true })
@@ -211,7 +228,7 @@ export default function AdminPage() {
 
       let pageToken: string | undefined = undefined
       let current: Counters = ZERO
-      const MAX_RETRY = 5
+      const MAX_RETRY = 10 // retry สูงสุดต่อ page เดียว
 
       while (true) {
         if (stopRef.current) break
@@ -222,7 +239,7 @@ export default function AdminPage() {
         while (attempt < MAX_RETRY) {
           try {
             result = await syncPage(pageToken, current, abort.signal)
-            break // สำเร็จ
+            break
           } catch (err: unknown) {
             if ((err as Error).name === 'AbortError' || stopRef.current) {
               result = { counters: current, stopped: true }
@@ -230,9 +247,9 @@ export default function AdminPage() {
             }
             attempt++
             if (attempt >= MAX_RETRY) throw err
-            // รอก่อน retry (2^attempt วินาที สูงสุด 30 วินาที)
-            const wait = Math.min(2 ** attempt * 1000, 30000)
-            toast(`เกิดข้อผิดพลาด กำลัง retry ${attempt}/${MAX_RETRY}...`, { icon: '🔄', duration: wait })
+            // Exponential backoff: 3s, 6s, 12s, 24s, 30s, 30s, ...
+            const wait = Math.min(3000 * Math.pow(2, attempt - 1), 30000)
+            toast(`Network หลุด กำลัง retry (${attempt}/${MAX_RETRY})...`, { icon: '🔄', duration: wait })
             await new Promise(r => setTimeout(r, wait))
           }
         }
