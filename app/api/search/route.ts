@@ -52,16 +52,19 @@ export async function POST(req: NextRequest) {
     // ค้นหา records จาก Supabase
     const records = await getFaceRecordsByIds(faceIds)
 
-    // Map confidence กลับเข้า records
-    const confidenceMap = new Map<string, number>()
+    // Map confidence + faceArea กลับเข้า records
+    const matchMap = new Map<string, { confidence: number; faceArea: number }>()
     for (const m of matches) {
-      // Azure confidence เป็น 0–1 → แปลงเป็น % แสดงใน UI
-      confidenceMap.set(m.persistedFaceId, Math.round(m.confidence * 100))
+      matchMap.set(m.persistedFaceId, {
+        confidence: Math.round(m.confidence * 100),
+        faceArea: m.faceArea,
+      })
     }
 
     const results: SearchResult[] = records.map((r) => ({
       ...r,
-      confidence: confidenceMap.get(r.face_id) ?? 0,
+      confidence: matchMap.get(r.face_id)?.confidence ?? 0,
+      faceArea: matchMap.get(r.face_id)?.faceArea ?? 0,
       thumbnail_url: getDriveThumbnailUrl(r.drive_file_id, 400),
       view_url: getDriveViewUrl(r.drive_file_id),
     }))

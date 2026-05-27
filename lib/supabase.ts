@@ -12,7 +12,8 @@ export interface FaceIndexRow {
 }
 
 export interface SearchResult extends FaceIndexRow {
-  confidence: number
+  confidence: number   // % ความคล้ายของใบหน้า (0–100)
+  faceArea: number     // พื้นที่ใบหน้าในรูปต้นฉบับ (0–1)
   view_url: string
 }
 
