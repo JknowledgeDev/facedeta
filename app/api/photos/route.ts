@@ -8,8 +8,9 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
     const pageToken = searchParams.get('pageToken') ?? undefined
     const folderId = searchParams.get('folderId') ?? undefined
+    const date = searchParams.get('date') ?? undefined   // YYYY-MM-DD (เวลาไทย)
 
-    const { files, nextPageToken } = await listImagesInFolder(pageToken, folderId)
+    const { files, nextPageToken } = await listImagesInFolder(pageToken, folderId, date)
 
     const photos = files.map((f) => ({
       id: f.id,

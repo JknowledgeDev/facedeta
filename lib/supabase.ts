@@ -94,6 +94,34 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
   return (data ?? []).map((r: { face_id: string }) => r.face_id)
 }
 
+/**
+ * ดึงชื่อกิจกรรมจัดกลุ่มตามวันที่ (event_date)
+ * คืน { "YYYY-MM-DD": ["กิจกรรม A", "กิจกรรม B"] }
+ */
+export async function getEventsByDate(): Promise<Record<string, string[]>> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase
+    .from('face_index')
+    .select('event_date, event_name')
+    .not('event_date', 'is', null)
+
+  if (error) return {}
+
+  const map: Record<string, Set<string>> = {}
+  for (const row of data ?? []) {
+    const ed = (row as { event_date: string | null }).event_date
+    const en = (row as { event_name: string | null }).event_name
+    if (!ed) continue
+    const date = ed.slice(0, 10)
+    if (!map[date]) map[date] = new Set()
+    if (en) map[date].add(en)
+  }
+
+  const out: Record<string, string[]> = {}
+  for (const [k, v] of Object.entries(map)) out[k] = Array.from(v)
+  return out
+}
+
 // บันทึก search log
 export async function logSearch(matchCount: number, threshold: number): Promise<void> {
   const supabase = getSupabaseAdmin()

@@ -26,21 +26,47 @@ export interface DriveFile {
   webViewLink?: string
 }
 
+/** Thailand timezone offset (UTC+7) เป็น ms */
+const TH_OFFSET_MS = 7 * 60 * 60 * 1000
+
+/** แปลง ISO timestamp (UTC) → วันที่ตามเวลาไทย "YYYY-MM-DD" */
+export function toThaiDateString(iso: string): string {
+  const d = new Date(iso)
+  return new Date(d.getTime() + TH_OFFSET_MS).toISOString().slice(0, 10)
+}
+
+/** สร้างช่วงเวลา UTC ของ "วันไทย" หนึ่งวัน (สำหรับ query Drive) */
+function thaiDayToUtcRange(date: string): { startUtc: string; endUtc: string } {
+  // date = "YYYY-MM-DD" (เวลาไทย) → 00:00 +07:00
+  const start = new Date(`${date}T00:00:00+07:00`)
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
+  return { startUtc: start.toISOString(), endUtc: end.toISOString() }
+}
+
 // ดึงรายการไฟล์รูปภาพจาก folder
 // folderId: ถ้าไม่ส่งมาจะใช้ค่าจาก env GOOGLE_DRIVE_FOLDER_ID
+// date: ถ้าส่งมา (YYYY-MM-DD เวลาไทย) จะกรองเฉพาะรูปของวันนั้น
 export async function listImagesInFolder(
   pageToken?: string,
-  folderId?: string
+  folderId?: string,
+  date?: string
 ): Promise<{
   files: DriveFile[]
   nextPageToken?: string
 }> {
   const drive = getDriveClient()
   const targetFolder = folderId || FOLDER_ID
+
+  let q = `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`
+  if (date) {
+    const { startUtc, endUtc } = thaiDayToUtcRange(date)
+    q += ` and createdTime >= '${startUtc}' and createdTime < '${endUtc}'`
+  }
+
   const response = await drive.files.list({
-    q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
+    q,
     fields: 'nextPageToken, files(id, name, mimeType, createdTime, thumbnailLink, webViewLink)',
-    pageSize: 25,
+    pageSize: date ? 100 : 25,
     pageToken,
     orderBy: 'createdTime desc',
   })
@@ -49,6 +75,39 @@ export async function listImagesInFolder(
     files: (response.data.files ?? []) as DriveFile[],
     nextPageToken: response.data.nextPageToken ?? undefined,
   }
+}
+
+/**
+ * สแกนรูปทั้งหมด → จัดกลุ่มตามวันที่ (เวลาไทย) สำหรับปฏิทิน highlight
+ * คืน { days: { "YYYY-MM-DD": count }, total }
+ */
+export async function getPhotoCalendar(folderId?: string): Promise<{
+  days: Record<string, number>
+  total: number
+}> {
+  const drive = getDriveClient()
+  const targetFolder = folderId || FOLDER_ID
+  const days: Record<string, number> = {}
+  let total = 0
+  let pageToken: string | undefined
+
+  do {
+    const response = await drive.files.list({
+      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
+      fields: 'nextPageToken, files(id, createdTime)',
+      pageSize: 1000,
+      pageToken,
+    })
+    for (const f of response.data.files ?? []) {
+      if (!f.createdTime) continue
+      const date = toThaiDateString(f.createdTime)
+      days[date] = (days[date] ?? 0) + 1
+      total++
+    }
+    pageToken = response.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  return { days, total }
 }
 
 /** นับรูปทั้งหมดในโฟลเดอร์ (ใช้ pageSize 1000 เพื่อความเร็ว) */
