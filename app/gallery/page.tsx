@@ -40,7 +40,7 @@ export default function GalleryPage() {
   const [calendar, setCalendar] = useState<CalendarData>({ days: {}, events: {}, total: 0 })
   const [calendarLoading, setCalendarLoading] = useState(true)
   const [selectedDate, setSelectedDate] = useState<string | null>(null)
-  const [showCalendar, setShowCalendar] = useState(true)
+  const [showCalendar, setShowCalendar] = useState(false)
 
   const sentinelRef = useRef<HTMLDivElement>(null)
   const loadingRef = useRef(false)
