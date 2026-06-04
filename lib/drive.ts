@@ -66,9 +66,10 @@ export async function listImagesInFolder(
   const response = await drive.files.list({
     q,
     fields: 'nextPageToken, files(id, name, mimeType, createdTime, thumbnailLink, webViewLink)',
-    pageSize: date ? 100 : 25,
+    pageSize: 100,
     pageToken,
-    orderBy: 'createdTime desc',
+    // หมายเหตุ: ห้ามใส่ orderBy — Drive API จะหยุด paginate ที่ ~2,000 รายการ
+    // เมื่อใช้ orderBy บน folder ใหญ่ ทำให้ดึงรูปไม่ครบ (ทั้ง gallery และ sync)
   })
 
   return {
