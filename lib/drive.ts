@@ -78,6 +78,41 @@ export async function listImagesInFolder(
   }
 }
 
+export interface PhotoMeta {
+  id: string
+  name: string
+  createdTime: string
+}
+
+/**
+ * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด
+ * ใช้ pageSize 1000 + ไม่ใส่ orderBy (เพื่อ paginate ได้ครบ) แล้ว sort เอง
+ */
+export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]> {
+  const drive = getDriveClient()
+  const targetFolder = folderId || FOLDER_ID
+  const out: PhotoMeta[] = []
+  let pageToken: string | undefined
+
+  do {
+    const response = await drive.files.list({
+      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
+      fields: 'nextPageToken, files(id, name, createdTime)',
+      pageSize: 1000,
+      pageToken,
+    })
+    for (const f of response.data.files ?? []) {
+      if (!f.id) continue
+      out.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
+    }
+    pageToken = response.data.nextPageToken ?? undefined
+  } while (pageToken)
+
+  // ISO string เรียง lexicographic = เรียงตามเวลา → ใหม่สุดก่อน (desc)
+  out.sort((a, b) => b.createdTime.localeCompare(a.createdTime))
+  return out
+}
+
 /**
  * สแกนรูปทั้งหมด → จัดกลุ่มตามวันที่ (เวลาไทย) สำหรับปฏิทิน highlight
  * คืน { days: { "YYYY-MM-DD": count }, total }
