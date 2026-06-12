@@ -81,35 +81,19 @@ export async function listImagesInFolder(
 export interface PhotoMeta {
   id: string
   name: string
-  time: string   // timestamp สำหรับ sort/แสดงผล (ISO-like, ใหม่สุดก่อน)
+  time: string   // createdTime (เวลาอัปโหลด Drive) สำหรับ tiebreak/แสดงผล
   date: string   // วันที่ไทย "YYYY-MM-DD" สำหรับจัดกลุ่ม/กรอง
 }
 
 /**
- * เลือก timestamp ที่ดีที่สุด:
- * - EXIF (imageMediaMetadata.time) = เวลาถ่ายจริง (Local time กล้อง = ไทย) → ใช้ก่อน
- * - createdTime = เวลาอัปโหลดขึ้น Drive (UTC) → fallback
- */
-function bestTimes(exif?: string | null, created?: string | null): { time: string; date: string } {
-  if (exif) {
-    // EXIF format: "2026:06:04 14:30:00" (เวลาท้องถิ่น = ไทยอยู่แล้ว)
-    const m = exif.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
-    if (m) {
-      return {
-        time: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`,
-        date: `${m[1]}-${m[2]}-${m[3]}`,
-      }
-    }
-  }
-  if (created) {
-    return { time: created, date: toThaiDateString(created) }
-  }
-  return { time: '', date: '' }
-}
-
-/**
- * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด ตาม "เวลาถ่ายจริง"
- * ใช้ pageSize 1000 + ไม่ใส่ orderBy (เพื่อ paginate ได้ครบ) แล้ว sort เอง
+ * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด
+ *
+ * สำคัญ:
+ *  - ขอเฉพาะ field เบาๆ (id, name, createdTime) — ห้ามขอ imageMediaMetadata
+ *    เพราะ Drive จะจำกัดผลลัพธ์ที่ ~2,000 รายการเมื่อขอ metadata หนัก
+ *  - ไม่ใส่ orderBy (orderBy ก็จำกัด ~2,000 เช่นกัน) → paginate ครบทุกหน้า
+ *  - เรียงตาม "ชื่อไฟล์" (IMG_8207 ใหม่กว่า IMG_8077) เพราะ HEIC ไม่มี EXIF
+ *    ใน Drive และชื่อไฟล์ iPhone เรียงตามเวลาถ่ายจริง
  */
 export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]> {
   const drive = getDriveClient()
@@ -120,20 +104,29 @@ export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]
   do {
     const response = await drive.files.list({
       q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
-      fields: 'nextPageToken, files(id, name, createdTime, imageMediaMetadata(time))',
+      fields: 'nextPageToken, files(id, name, createdTime)',
       pageSize: 1000,
       pageToken,
     })
     for (const f of response.data.files ?? []) {
       if (!f.id) continue
-      const { time, date } = bestTimes(f.imageMediaMetadata?.time, f.createdTime)
-      out.push({ id: f.id, name: f.name ?? '', time, date })
+      const created = f.createdTime ?? ''
+      out.push({
+        id: f.id,
+        name: f.name ?? '',
+        time: created,
+        date: created ? toThaiDateString(created) : '',
+      })
     }
     pageToken = response.data.nextPageToken ?? undefined
   } while (pageToken)
 
-  // เรียง lexicographic ตามเวลาถ่าย → ใหม่สุดก่อน (desc); รูปไม่มีเวลาไปท้ายสุด
-  out.sort((a, b) => b.time.localeCompare(a.time))
+  // ใหม่สุดก่อน: เรียงชื่อไฟล์แบบ numeric ลง (IMG_8207 > IMG_8077), เวลาเป็นตัวตัดสิน
+  out.sort((a, b) => {
+    const byName = b.name.localeCompare(a.name, undefined, { numeric: true })
+    if (byName !== 0) return byName
+    return b.time.localeCompare(a.time)
+  })
   return out
 }
 
