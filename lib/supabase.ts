@@ -97,29 +97,72 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
 /**
  * ดึงชื่อกิจกรรมจัดกลุ่มตามวันที่ (event_date)
  * คืน { "YYYY-MM-DD": ["กิจกรรม A", "กิจกรรม B"] }
+ * (paginate ทีละ 1000 แถว เพราะ Supabase จำกัด default 1000)
  */
 export async function getEventsByDate(): Promise<Record<string, string[]>> {
   const supabase = getSupabaseAdmin()
-  const { data, error } = await supabase
-    .from('face_index')
-    .select('event_date, event_name')
-    .not('event_date', 'is', null)
-
-  if (error) return {}
-
   const map: Record<string, Set<string>> = {}
-  for (const row of data ?? []) {
-    const ed = (row as { event_date: string | null }).event_date
-    const en = (row as { event_name: string | null }).event_name
-    if (!ed) continue
-    const date = ed.slice(0, 10)
-    if (!map[date]) map[date] = new Set()
-    if (en) map[date].add(en)
+  const SIZE = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('face_index')
+      .select('event_date, event_name')
+      .not('event_date', 'is', null)
+      .range(from, from + SIZE - 1)
+
+    if (error || !data || data.length === 0) break
+
+    for (const row of data) {
+      const ed = (row as { event_date: string | null }).event_date
+      const en = (row as { event_name: string | null }).event_name
+      if (!ed) continue
+      const date = ed.slice(0, 10)
+      if (!map[date]) map[date] = new Set()
+      if (en) map[date].add(en)
+    }
+
+    if (data.length < SIZE) break
+    from += SIZE
   }
 
   const out: Record<string, string[]> = {}
   for (const [k, v] of Object.entries(map)) out[k] = Array.from(v)
   return out
+}
+
+/**
+ * ดึงเวลาที่อัปโหลดเข้าระบบ (uploaded_at) ของแต่ละรูป
+ * คืน { drive_file_id: uploaded_at(ISO) } — เอาเวลาล่าสุดถ้ารูปมีหลายใบหน้า
+ * (paginate ทีละ 1000 แถว)
+ */
+export async function getUploadTimesByFile(): Promise<Record<string, string>> {
+  const supabase = getSupabaseAdmin()
+  const map: Record<string, string> = {}
+  const SIZE = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('face_index')
+      .select('drive_file_id, uploaded_at')
+      .range(from, from + SIZE - 1)
+
+    if (error || !data || data.length === 0) break
+
+    for (const row of data) {
+      const id = (row as { drive_file_id: string | null }).drive_file_id
+      const ts = (row as { uploaded_at: string | null }).uploaded_at
+      if (!id || !ts) continue
+      if (!map[id] || ts > map[id]) map[id] = ts
+    }
+
+    if (data.length < SIZE) break
+    from += SIZE
+  }
+
+  return map
 }
 
 // บันทึก search log
