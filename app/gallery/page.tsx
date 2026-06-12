@@ -31,14 +31,21 @@ const viewUrl = (id: string) => `https://drive.google.com/file/d/${id}/view`
 
 const PAGE = 60 // จำนวนรูปต่อการแสดงผลหนึ่งช่วง
 
+interface EventSummary {
+  name: string
+  dates: string[]
+  fileIds: string[]
+  count: number
+}
+
 type Filter =
   | { kind: 'all' }
   | { kind: 'date'; date: string }
-  | { kind: 'event'; name: string; dates: string[] }
+  | { kind: 'event'; name: string; fileIds: string[] }
 
 export default function GalleryPage() {
   const [manifest, setManifest] = useState<PhotoMeta[]>([])
-  const [events, setEvents] = useState<Record<string, string[]>>({})
+  const [eventSummaries, setEventSummaries] = useState<EventSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,7 +70,7 @@ export default function GalleryPage() {
         if (!mRes.ok) throw new Error('โหลดรูปไม่สำเร็จ')
         const mData = await mRes.json()
         setManifest(mData.photos ?? [])
-        if (eRes.ok) setEvents((await eRes.json()).events ?? {})
+        if (eRes.ok) setEventSummaries((await eRes.json()).events ?? [])
       } catch (err: unknown) {
         setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
       } finally {
@@ -81,31 +88,35 @@ export default function GalleryPage() {
     return d
   }, [manifest])
 
-  // รายการกิจกรรม (จาก events map) เรียงตามวันล่าสุด
+  // รายการกิจกรรม เรียงตามวันล่าสุด
   const eventList = useMemo(() => {
-    const m = new Map<string, Set<string>>()
-    for (const [date, names] of Object.entries(events)) {
-      for (const n of names) {
-        if (!m.has(n)) m.set(n, new Set())
-        m.get(n)!.add(date)
+    return eventSummaries
+      .map((ev) => ({
+        ...ev,
+        latest: ev.dates.slice().sort().reverse()[0] ?? '',
+      }))
+      .sort((a, b) => b.latest.localeCompare(a.latest))
+  }, [eventSummaries])
+
+  // map วันที่ → ชื่อกิจกรรม (สำหรับ dot ในปฏิทิน)
+  const eventsByDate = useMemo(() => {
+    const m: Record<string, string[]> = {}
+    for (const ev of eventSummaries) {
+      for (const d of ev.dates) {
+        if (!m[d]) m[d] = []
+        if (!m[d].includes(ev.name)) m[d].push(ev.name)
       }
     }
-    return Array.from(m.entries())
-      .map(([name, dateSet]) => {
-        const dates = Array.from(dateSet)
-        const count = dates.reduce((s, d) => s + (days[d] ?? 0), 0)
-        const latest = dates.slice().sort().reverse()[0] ?? ''
-        return { name, dates, count, latest }
-      })
-      .sort((a, b) => b.latest.localeCompare(a.latest))
-  }, [events, days])
+    return m
+  }, [eventSummaries])
 
   // กรองรูปตาม filter (ยังคงเรียงใหม่สุดก่อนจาก manifest)
   const filtered = useMemo(() => {
     if (filter.kind === 'all') return manifest
     if (filter.kind === 'date') return manifest.filter((p) => p.date === filter.date)
-    const set = new Set(filter.dates)
-    return manifest.filter((p) => set.has(p.date))
+    // event → กรองตาม drive_file_id ที่ผูกกับกิจกรรมโดยตรง
+    const set = new Set(filter.fileIds)
+    return manifest.filter((p) => set.has(p.id))
   }, [manifest, filter])
 
   // reset จำนวนที่แสดงเมื่อเปลี่ยน filter
@@ -162,7 +173,7 @@ export default function GalleryPage() {
   const onSelectEvent = (name: string) => {
     if (!name) { setFilter({ kind: 'all' }); return }
     const ev = eventList.find((e) => e.name === name)
-    if (ev) setFilter({ kind: 'event', name: ev.name, dates: ev.dates })
+    if (ev) setFilter({ kind: 'event', name: ev.name, fileIds: ev.fileIds })
   }
 
   return (
@@ -238,7 +249,7 @@ export default function GalleryPage() {
       {showCalendar && (
         <PhotoCalendar
           days={days}
-          events={events}
+          events={eventsByDate}
           selectedDate={filter.kind === 'date' ? filter.date : null}
           onSelect={(d) => setFilter(d ? { kind: 'date', date: d } : { kind: 'all' })}
           loading={loading}

@@ -132,6 +132,56 @@ export async function getEventsByDate(): Promise<Record<string, string[]>> {
   return out
 }
 
+export interface EventSummary {
+  name: string
+  dates: string[]      // วันที่ที่ระบุไว้ (event_date)
+  fileIds: string[]    // drive_file_id ของรูปในกิจกรรมนี้
+  count: number        // จำนวนรูป (distinct) ในกิจกรรม
+}
+
+/**
+ * ดึงรายการกิจกรรมพร้อม drive_file_id ของรูปในแต่ละกิจกรรม
+ * ใช้กรองรูปตามกิจกรรมโดยตรง (ไม่พึ่งวันที่ ซึ่งอาจไม่ตรงกับวันถ่าย)
+ * (paginate ทีละ 1000 แถว)
+ */
+export async function getEventsList(): Promise<EventSummary[]> {
+  const supabase = getSupabaseAdmin()
+  const m = new Map<string, { dates: Set<string>; files: Set<string> }>()
+  const SIZE = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('face_index')
+      .select('event_name, event_date, drive_file_id')
+      .not('event_name', 'is', null)
+      .range(from, from + SIZE - 1)
+
+    if (error || !data || data.length === 0) break
+
+    for (const row of data) {
+      const name = (row as { event_name: string | null }).event_name
+      const ed = (row as { event_date: string | null }).event_date
+      const fid = (row as { drive_file_id: string | null }).drive_file_id
+      if (!name) continue
+      if (!m.has(name)) m.set(name, { dates: new Set(), files: new Set() })
+      const e = m.get(name)!
+      if (ed) e.dates.add(ed.slice(0, 10))
+      if (fid) e.files.add(fid)
+    }
+
+    if (data.length < SIZE) break
+    from += SIZE
+  }
+
+  return Array.from(m.entries()).map(([name, v]) => ({
+    name,
+    dates: Array.from(v.dates),
+    fileIds: Array.from(v.files),
+    count: v.files.size,
+  }))
+}
+
 /**
  * ดึงเวลาที่อัปโหลดเข้าระบบ (uploaded_at) ของแต่ละรูป
  * คืน { drive_file_id: uploaded_at(ISO) } — เอาเวลาล่าสุดถ้ารูปมีหลายใบหน้า
