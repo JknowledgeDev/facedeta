@@ -81,11 +81,34 @@ export async function listImagesInFolder(
 export interface PhotoMeta {
   id: string
   name: string
-  createdTime: string
+  time: string   // timestamp สำหรับ sort/แสดงผล (ISO-like, ใหม่สุดก่อน)
+  date: string   // วันที่ไทย "YYYY-MM-DD" สำหรับจัดกลุ่ม/กรอง
 }
 
 /**
- * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด
+ * เลือก timestamp ที่ดีที่สุด:
+ * - EXIF (imageMediaMetadata.time) = เวลาถ่ายจริง (Local time กล้อง = ไทย) → ใช้ก่อน
+ * - createdTime = เวลาอัปโหลดขึ้น Drive (UTC) → fallback
+ */
+function bestTimes(exif?: string | null, created?: string | null): { time: string; date: string } {
+  if (exif) {
+    // EXIF format: "2026:06:04 14:30:00" (เวลาท้องถิ่น = ไทยอยู่แล้ว)
+    const m = exif.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+    if (m) {
+      return {
+        time: `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`,
+        date: `${m[1]}-${m[2]}-${m[3]}`,
+      }
+    }
+  }
+  if (created) {
+    return { time: created, date: toThaiDateString(created) }
+  }
+  return { time: '', date: '' }
+}
+
+/**
+ * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด ตาม "เวลาถ่ายจริง"
  * ใช้ pageSize 1000 + ไม่ใส่ orderBy (เพื่อ paginate ได้ครบ) แล้ว sort เอง
  */
 export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]> {
@@ -97,19 +120,20 @@ export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]
   do {
     const response = await drive.files.list({
       q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
-      fields: 'nextPageToken, files(id, name, createdTime)',
+      fields: 'nextPageToken, files(id, name, createdTime, imageMediaMetadata(time))',
       pageSize: 1000,
       pageToken,
     })
     for (const f of response.data.files ?? []) {
       if (!f.id) continue
-      out.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
+      const { time, date } = bestTimes(f.imageMediaMetadata?.time, f.createdTime)
+      out.push({ id: f.id, name: f.name ?? '', time, date })
     }
     pageToken = response.data.nextPageToken ?? undefined
   } while (pageToken)
 
-  // ISO string เรียง lexicographic = เรียงตามเวลา → ใหม่สุดก่อน (desc)
-  out.sort((a, b) => b.createdTime.localeCompare(a.createdTime))
+  // เรียง lexicographic ตามเวลาถ่าย → ใหม่สุดก่อน (desc); รูปไม่มีเวลาไปท้ายสุด
+  out.sort((a, b) => b.time.localeCompare(a.time))
   return out
 }
 

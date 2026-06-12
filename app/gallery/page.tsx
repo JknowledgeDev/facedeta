@@ -7,7 +7,8 @@ import PhotoCalendar from '@/components/PhotoCalendar'
 interface PhotoMeta {
   id: string
   name: string
-  createdTime: string
+  time: string   // เวลาถ่ายจริง (ใหม่สุดก่อน)
+  date: string   // วันที่ไทย "YYYY-MM-DD"
 }
 
 const TH_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
@@ -71,12 +72,11 @@ export default function GalleryPage() {
     })()
   }, [])
 
-  // นับรูปต่อวัน (จาก manifest)
+  // นับรูปต่อวัน (จาก manifest — ใช้วันที่ถ่ายจริง)
   const days = useMemo(() => {
     const d: Record<string, number> = {}
     for (const p of manifest) {
-      const dt = toThaiDate(p.createdTime)
-      if (dt) d[dt] = (d[dt] ?? 0) + 1
+      if (p.date) d[p.date] = (d[p.date] ?? 0) + 1
     }
     return d
   }, [manifest])
@@ -103,9 +103,9 @@ export default function GalleryPage() {
   // กรองรูปตาม filter (ยังคงเรียงใหม่สุดก่อนจาก manifest)
   const filtered = useMemo(() => {
     if (filter.kind === 'all') return manifest
-    if (filter.kind === 'date') return manifest.filter((p) => toThaiDate(p.createdTime) === filter.date)
+    if (filter.kind === 'date') return manifest.filter((p) => p.date === filter.date)
     const set = new Set(filter.dates)
-    return manifest.filter((p) => set.has(toThaiDate(p.createdTime)))
+    return manifest.filter((p) => set.has(p.date))
   }, [manifest, filter])
 
   // reset จำนวนที่แสดงเมื่อเปลี่ยน filter
@@ -375,7 +375,7 @@ export default function GalleryPage() {
                 {lightboxIdx !== null && (
                   <p className="text-white/60 text-xs mt-0.5">
                     {lightboxIdx + 1} / {filtered.length.toLocaleString()}
-                    {lightbox.createdTime ? ` • ${formatThaiDate(toThaiDate(lightbox.createdTime))}` : ''}
+                    {lightbox.date ? ` • ${formatThaiDate(lightbox.date)}` : ''}
                   </p>
                 )}
               </div>
