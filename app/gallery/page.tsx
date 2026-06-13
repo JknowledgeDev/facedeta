@@ -287,25 +287,24 @@ export default function GalleryPage() {
 
       {/* Skeleton */}
       {loading && (
-        <div className="columns-2 sm:columns-3 lg:columns-4 gap-3 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
           {Array.from({ length: 12 }).map((_, i) => (
-            <div key={i} className="break-inside-avoid rounded-xl bg-gray-200 animate-pulse"
-              style={{ height: `${150 + (i % 4) * 50}px` }} />
+            <div key={i} className="rounded-xl bg-gray-200 animate-pulse aspect-square" />
           ))}
         </div>
       )}
 
       {/* Grid */}
       {!loading && shown.length > 0 && (
-        <div className="columns-2 sm:columns-3 lg:columns-4 gap-3 space-y-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 sm:gap-3">
           {shown.map((photo, idx) => (
             <div key={photo.id}
-              className="break-inside-avoid group relative rounded-xl overflow-hidden cursor-pointer
+              className="group relative rounded-xl overflow-hidden cursor-pointer aspect-square
                 shadow-sm hover:shadow-lg transition-shadow duration-200 bg-gray-100"
               onClick={() => openLightbox(idx)}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={thumbUrl(photo.id)} alt={photo.name}
-                className="w-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
+                className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                 loading="lazy" />
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-colors duration-200 flex items-center justify-center">
                 <div className="w-10 h-10 bg-white/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow">
