@@ -17,6 +17,68 @@ export interface SearchResult extends FaceIndexRow {
   view_url: string
 }
 
+export interface GalleryPhoto {
+  id: string              // drive_file_id
+  name: string            // file_name
+  eventName: string | null
+  date: string            // event_date "YYYY-MM-DD"
+  uploadedAt: string      // เวลา sync เข้าระบบ
+}
+
+/**
+ * ดึงรูปทั้งหมดที่เคย sync เข้าระบบ (จากทุกโฟลเดอร์/ทุก URL)
+ * อ่านจาก face_index → distinct ตาม drive_file_id (รูปเดียวอาจมีหลายใบหน้า)
+ * เรียงใหม่สุดก่อน: event_date ลง, ชื่อไฟล์ลง
+ * (paginate ทีละ 1000 แถว เพราะ Supabase จำกัด default 1000)
+ */
+export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
+  const supabase = getSupabaseAdmin()
+  const byId = new Map<string, GalleryPhoto>()
+  const SIZE = 1000
+  let from = 0
+
+  while (true) {
+    const { data, error } = await supabase
+      .from('face_index')
+      .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
+      .range(from, from + SIZE - 1)
+
+    if (error || !data || data.length === 0) break
+
+    for (const row of data) {
+      const r = row as {
+        drive_file_id: string | null
+        file_name: string | null
+        event_name: string | null
+        event_date: string | null
+        uploaded_at: string | null
+      }
+      if (!r.drive_file_id || byId.has(r.drive_file_id)) continue
+      byId.set(r.drive_file_id, {
+        id: r.drive_file_id,
+        name: r.file_name ?? '',
+        eventName: r.event_name ?? null,
+        date: r.event_date ? r.event_date.slice(0, 10) : '',
+        uploadedAt: r.uploaded_at ?? '',
+      })
+    }
+
+    if (data.length < SIZE) break
+    from += SIZE
+  }
+
+  const out = Array.from(byId.values())
+  // ใหม่สุดก่อน: วันกิจกรรมลง, ชื่อไฟล์ numeric ลง, เวลา sync ลง
+  out.sort((a, b) => {
+    const byDate = (b.date || '').localeCompare(a.date || '')
+    if (byDate !== 0) return byDate
+    const byName = b.name.localeCompare(a.name, undefined, { numeric: true })
+    if (byName !== 0) return byName
+    return (b.uploadedAt || '').localeCompare(a.uploadedAt || '')
+  })
+  return out
+}
+
 // Server-side client (ใช้ service role key)
 export function getSupabaseAdmin() {
   return createClient(
