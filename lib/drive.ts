@@ -81,51 +81,97 @@ export async function listImagesInFolder(
 export interface PhotoMeta {
   id: string
   name: string
-  time: string   // createdTime (เวลาอัปโหลด Drive) สำหรับ tiebreak/แสดงผล
+  time: string   // createdTime (เวลาอัปโหลด Drive) สำหรับเรียง/แสดงผล
   date: string   // วันที่ไทย "YYYY-MM-DD" สำหรับจัดกลุ่ม/กรอง
 }
 
+interface RawDriveImage {
+  id: string
+  name: string
+  createdTime: string
+}
+
 /**
- * ดึงรูปทั้งหมด (metadata เท่านั้น) เรียงใหม่สุด → เก่าสุด
+ * ดึงรูปทั้งหมดจากโฟลเดอร์ + ทุก subfolder แบบ recursive (BFS)
  *
- * สำคัญ:
- *  - ขอเฉพาะ field เบาๆ (id, name, createdTime) — ห้ามขอ imageMediaMetadata
- *    เพราะ Drive จะจำกัดผลลัพธ์ที่ ~2,000 รายการเมื่อขอ metadata หนัก
- *  - ไม่ใส่ orderBy (orderBy ก็จำกัด ~2,000 เช่นกัน) → paginate ครบทุกหน้า
- *  - เรียงตาม "ชื่อไฟล์" (IMG_8207 ใหม่กว่า IMG_8077) เพราะ HEIC ไม่มี EXIF
- *    ใน Drive และชื่อไฟล์ iPhone เรียงตามเวลาถ่ายจริง
+ * สำคัญมาก: Drive query `'<id>' in parents` คืนเฉพาะไฟล์ที่อยู่ในโฟลเดอร์นั้น
+ * "โดยตรง" เท่านั้น — ไม่ลงไปใน subfolder ดังนั้นถ้ารูปจัดเก็บแยกเป็นโฟลเดอร์ย่อย
+ * ตามกิจกรรม จะดึงได้แค่รูปใน root → ต้องเดินทุกโฟลเดอร์เอง
+ *
+ * - ขอเฉพาะ field เบา (id, name, createdTime) — ห้ามขอ imageMediaMetadata
+ *   เพราะ Drive จะจำกัดผลลัพธ์ ~2,000 รายการเมื่อขอ metadata หนัก
+ * - ไม่ใส่ orderBy (ก็จำกัด ~2,000 เช่นกัน) → paginate ครบทุกหน้า
+ * - de-dupe ด้วย id เพราะไฟล์ Drive อาจมีหลาย parent
+ */
+async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveImage[]> {
+  const drive = getDriveClient()
+  const out: RawDriveImage[] = []
+  const seenPhoto = new Set<string>()
+  const seenFolder = new Set<string>()
+  const queue: string[] = [rootFolderId]
+
+  while (queue.length > 0) {
+    const folderId = queue.shift()!
+    if (seenFolder.has(folderId)) continue
+    seenFolder.add(folderId)
+
+    // 1) หา subfolder ในโฟลเดอร์นี้ → เข้าคิว
+    let folderToken: string | undefined
+    do {
+      const res = await drive.files.list({
+        q: `'${folderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false`,
+        fields: 'nextPageToken, files(id)',
+        pageSize: 1000,
+        pageToken: folderToken,
+      })
+      for (const f of res.data.files ?? []) {
+        if (f.id && !seenFolder.has(f.id)) queue.push(f.id)
+      }
+      folderToken = res.data.nextPageToken ?? undefined
+    } while (folderToken)
+
+    // 2) ดึงรูปในโฟลเดอร์นี้ (paginate ครบทุกหน้า)
+    let photoToken: string | undefined
+    do {
+      const res = await drive.files.list({
+        q: `'${folderId}' in parents and mimeType contains 'image/' and trashed = false`,
+        fields: 'nextPageToken, files(id, name, createdTime)',
+        pageSize: 1000,
+        pageToken: photoToken,
+      })
+      for (const f of res.data.files ?? []) {
+        if (!f.id || seenPhoto.has(f.id)) continue
+        seenPhoto.add(f.id)
+        out.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
+      }
+      photoToken = res.data.nextPageToken ?? undefined
+    } while (photoToken)
+  }
+
+  return out
+}
+
+/**
+ * ดึงรูปทั้งหมด (รวม subfolder) เรียงใหม่สุด → เก่าสุด
+ * เรียงตาม createdTime (เวลาอัปโหลด) เป็นหลัก → ทนต่อชื่อไฟล์ปนกัน
+ * (LINE_/DSC_/IMG_) และเลขรอบใหม่ (IMG_9999 → IMG_0001); ชื่อไฟล์เป็นตัวตัดสิน
  */
 export async function getAllPhotosSorted(folderId?: string): Promise<PhotoMeta[]> {
-  const drive = getDriveClient()
   const targetFolder = folderId || FOLDER_ID
-  const out: PhotoMeta[] = []
-  let pageToken: string | undefined
+  const raw = await listAllImagesRecursive(targetFolder)
 
-  do {
-    const response = await drive.files.list({
-      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
-      fields: 'nextPageToken, files(id, name, createdTime)',
-      pageSize: 1000,
-      pageToken,
-    })
-    for (const f of response.data.files ?? []) {
-      if (!f.id) continue
-      const created = f.createdTime ?? ''
-      out.push({
-        id: f.id,
-        name: f.name ?? '',
-        time: created,
-        date: created ? toThaiDateString(created) : '',
-      })
-    }
-    pageToken = response.data.nextPageToken ?? undefined
-  } while (pageToken)
+  const out: PhotoMeta[] = raw.map((f) => ({
+    id: f.id,
+    name: f.name,
+    time: f.createdTime,
+    date: f.createdTime ? toThaiDateString(f.createdTime) : '',
+  }))
 
-  // ใหม่สุดก่อน: เรียงชื่อไฟล์แบบ numeric ลง (IMG_8207 > IMG_8077), เวลาเป็นตัวตัดสิน
+  // ใหม่สุดก่อน: createdTime desc เป็นหลัก, ชื่อไฟล์ numeric desc เป็นตัวตัดสิน
   out.sort((a, b) => {
-    const byName = b.name.localeCompare(a.name, undefined, { numeric: true })
-    if (byName !== 0) return byName
-    return b.time.localeCompare(a.time)
+    const byTime = (b.time || '').localeCompare(a.time || '')
+    if (byTime !== 0) return byTime
+    return b.name.localeCompare(a.name, undefined, { numeric: true })
   })
   return out
 }
@@ -138,50 +184,24 @@ export async function getPhotoCalendar(folderId?: string): Promise<{
   days: Record<string, number>
   total: number
 }> {
-  const drive = getDriveClient()
   const targetFolder = folderId || FOLDER_ID
+  const raw = await listAllImagesRecursive(targetFolder)
+
   const days: Record<string, number> = {}
-  let total = 0
-  let pageToken: string | undefined
+  for (const f of raw) {
+    if (!f.createdTime) continue
+    const date = toThaiDateString(f.createdTime)
+    days[date] = (days[date] ?? 0) + 1
+  }
 
-  do {
-    const response = await drive.files.list({
-      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
-      fields: 'nextPageToken, files(id, createdTime)',
-      pageSize: 1000,
-      pageToken,
-    })
-    for (const f of response.data.files ?? []) {
-      if (!f.createdTime) continue
-      const date = toThaiDateString(f.createdTime)
-      days[date] = (days[date] ?? 0) + 1
-      total++
-    }
-    pageToken = response.data.nextPageToken ?? undefined
-  } while (pageToken)
-
-  return { days, total }
+  return { days, total: raw.length }
 }
 
-/** นับรูปทั้งหมดในโฟลเดอร์ (ใช้ pageSize 1000 เพื่อความเร็ว) */
+/** นับรูปทั้งหมดในโฟลเดอร์ + ทุก subfolder */
 export async function countImagesInFolder(folderId?: string): Promise<number> {
-  const drive = getDriveClient()
   const targetFolder = folderId || FOLDER_ID
-  let total = 0
-  let pageToken: string | undefined
-
-  do {
-    const response = await drive.files.list({
-      q: `'${targetFolder}' in parents and mimeType contains 'image/' and trashed = false`,
-      fields: 'nextPageToken, files(id)',
-      pageSize: 1000,
-      pageToken,
-    })
-    total += (response.data.files ?? []).length
-    pageToken = response.data.nextPageToken ?? undefined
-  } while (pageToken)
-
-  return total
+  const raw = await listAllImagesRecursive(targetFolder)
+  return raw.length
 }
 
 // ดาวน์โหลดรูปภาพเป็น Buffer
