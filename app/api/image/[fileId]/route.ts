@@ -5,7 +5,7 @@ import { toJpegBuffer } from '@/lib/image-utils'
 export const runtime = 'nodejs'
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: { fileId: string } }
 ) {
   const { fileId } = params
@@ -14,20 +14,30 @@ export async function GET(
     return NextResponse.json({ error: 'Missing fileId' }, { status: 400 })
   }
 
+  // ?w=ความกว้าง (px) — thumbnail ใช้เล็ก, lightbox ใช้ใหญ่
+  const wParam = parseInt(req.nextUrl.searchParams.get('w') ?? '', 10)
+  const width = Number.isFinite(wParam) && wParam > 0 ? Math.min(wParam, 2400) : 1200
+  // ?download=1 → ให้ browser ดาวน์โหลดไฟล์ (ผู้ปกครองเซฟรูปได้)
+  const isDownload = req.nextUrl.searchParams.get('download') === '1'
+  const rawName = req.nextUrl.searchParams.get('name') ?? `photo_${fileId.slice(0, 8)}`
+  const downloadName = rawName.replace(/\.(heic|heif)$/i, '.jpg').replace(/[^\w.\-]/g, '_')
+
   try {
     const raw = await downloadFileAsBuffer(fileId)
 
-    // แปลงเป็น JPEG (รองรับ HEIC) + resize ให้พอดีแสดงผล
-    const jpeg = await toJpegBuffer(raw, 1200)
+    // แปลงเป็น JPEG (รองรับ HEIC) + resize ตามขนาดที่ขอ
+    const jpeg = await toJpegBuffer(raw, width)
 
-    return new NextResponse(jpeg as unknown as BodyInit, {
-      status: 200,
-      headers: {
-        'Content-Type': 'image/jpeg',
-        // Cache ใน browser 1 ชั่วโมง
-        'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
-      },
-    })
+    const headers: Record<string, string> = {
+      'Content-Type': 'image/jpeg',
+      // cache ใน browser/CDN 1 วัน (รูปไม่เปลี่ยน)
+      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+    }
+    if (isDownload) {
+      headers['Content-Disposition'] = `attachment; filename="${downloadName}"`
+    }
+
+    return new NextResponse(jpeg as unknown as BodyInit, { status: 200, headers })
   } catch (err) {
     console.error('Image proxy error:', err)
     return NextResponse.json({ error: 'Failed to load image' }, { status: 500 })

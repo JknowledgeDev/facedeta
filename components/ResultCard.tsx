@@ -39,7 +39,10 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 export default function ResultCard({ result }: ResultCardProps) {
   const [showWhy, setShowWhy] = useState(false)
-  const imgSrc = `/api/image/${result.drive_file_id}`
+  const imgSrc = `/api/image/${result.drive_file_id}?w=600`
+  const fullSrc = `/api/image/${result.drive_file_id}?w=1600`
+  const dlName = result.file_name ?? `photo_${result.drive_file_id.slice(0, 8)}`
+  const downloadSrc = `/api/image/${result.drive_file_id}?download=1&name=${encodeURIComponent(dlName)}`
   const lv = confidenceLevel(result.confidence)
 
   const formattedDate = result.event_date
@@ -52,7 +55,7 @@ export default function ResultCard({ result }: ResultCardProps) {
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 group animate-slideUp">
 
       {/* Image */}
-      <a href={result.view_url} target="_blank" rel="noopener noreferrer">
+      <a href={fullSrc} target="_blank" rel="noopener noreferrer">
         <div className="relative aspect-square bg-gray-100 overflow-hidden">
           <img
             src={imgSrc}
@@ -164,9 +167,8 @@ export default function ResultCard({ result }: ResultCardProps) {
 
         {/* ปุ่มดาวน์โหลด */}
         <a
-          href={result.view_url}
-          target="_blank"
-          rel="noopener noreferrer"
+          href={downloadSrc}
+          download={dlName}
           className="flex items-center justify-center gap-1.5 w-full mt-1 py-1.5 rounded-lg
             bg-green-50 hover:bg-green-100 text-green-700 text-xs font-medium transition-colors"
         >
@@ -174,7 +176,7 @@ export default function ResultCard({ result }: ResultCardProps) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
               d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
           </svg>
-          ดู / ดาวน์โหลด
+          ดาวน์โหลด
         </a>
       </div>
     </div>

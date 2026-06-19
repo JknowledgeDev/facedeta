@@ -26,9 +26,10 @@ function formatThaiDate(date: string): string {
   return `${d} ${TH_MONTHS[m - 1]} ${y + 543}`
 }
 
-const thumbUrl = (id: string, size = 400) => `https://drive.google.com/thumbnail?id=${id}&sz=s${size}`
-const fullUrl = (id: string) => `https://drive.google.com/thumbnail?id=${id}&sz=s1920`
-const viewUrl = (id: string) => `https://drive.google.com/file/d/${id}/view`
+// ใช้ proxy ของแอป (OAuth) — ดู/ดาวน์โหลดได้ทุกคนโดยไม่ต้องตั้ง Drive เป็น public
+const thumbUrl = (id: string) => `/api/image/${id}?w=500`
+const fullUrl = (id: string) => `/api/image/${id}?w=1600`
+const downloadUrl = (id: string, name: string) => `/api/image/${id}?download=1&name=${encodeURIComponent(name)}`
 
 const PAGE = 60 // จำนวนรูปต่อการแสดงผลหนึ่งช่วง
 
@@ -378,14 +379,14 @@ export default function GalleryPage() {
                   </p>
                 )}
               </div>
-              <a href={viewUrl(lightbox.id)} target="_blank" rel="noopener noreferrer"
+              <a href={downloadUrl(lightbox.id, lightbox.name)} download={lightbox.name}
                 className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/35 text-white px-3 py-1.5 rounded-lg transition-colors shrink-0 ml-3"
                 onClick={(e) => e.stopPropagation()}>
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                    d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                 </svg>
-                เปิดใน Drive
+                ดาวน์โหลด
               </a>
             </div>
           </div>
