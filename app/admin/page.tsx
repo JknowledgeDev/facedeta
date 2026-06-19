@@ -224,7 +224,7 @@ export default function AdminPage() {
       setPhase('syncing')
       setStartTime(Date.now())
 
-      const BATCH = 50            // จำนวนรูปต่อ request (พอดีกับ Vercel 300s)
+      const BATCH = 10            // batch เล็ก → อัปเดตบ่อย (เกือบ realtime) + ไม่ timeout
       const MAX_RETRY = 10        // retry สูงสุดต่อ batch
       let current: Counters = ZERO
       let offset = 0

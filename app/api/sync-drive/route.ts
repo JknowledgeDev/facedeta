@@ -150,8 +150,10 @@ export async function POST(req: NextRequest) {
   return new Response(stream, {
     headers: {
       'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
+      'Cache-Control': 'no-cache, no-transform',
       'Connection': 'keep-alive',
+      // กัน proxy/CDN buffer สตรีม → ส่ง event ทีละรูปแบบ realtime
+      'X-Accel-Buffering': 'no',
     },
   })
 }
