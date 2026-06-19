@@ -70,6 +70,8 @@ export default function AdminPage() {
   // Stop/abort
   const stopRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
+  // รายการไฟล์ทั้งหมด (จาก /api/sync-list) — scan ครั้งเดียว
+  const filesRef = useRef<{ id: string; name: string }[]>([])
 
   // elapsed timer
   useEffect(() => {
@@ -88,27 +90,28 @@ export default function AdminPage() {
     ? (totalFiles - counters.processed) / rate
     : null
 
-  // ─── ขั้น 1: นับรูป ────────────────────────────────────────────────
-  const countFiles = useCallback(async (): Promise<number> => {
+  // ─── ขั้น 1: scan รายการไฟล์ทั้งหมด (รวมทุก subfolder) ────────────
+  const fetchFileList = useCallback(async (): Promise<{ id: string; name: string }[]> => {
     setPhase('counting')
     const params = new URLSearchParams()
     if (folderId) params.set('folderId', folderId)
-    const res = await fetch(apiUrl(`/api/sync-count?${params}`))
-    if (!res.ok) throw new Error('นับรูปไม่สำเร็จ')
-    const { total } = await res.json()
-    setTotalFiles(total)
-    return total
+    const res = await fetch(apiUrl(`/api/sync-list?${params}`))
+    if (!res.ok) throw new Error('สแกนรายการรูปไม่สำเร็จ')
+    const { files } = await res.json()
+    const list: { id: string; name: string }[] = files ?? []
+    filesRef.current = list
+    setTotalFiles(list.length)
+    return list
   }, [folderId])
 
-  // ─── ขั้น 2: sync หน้าเดียว (SSE) ────────────────────────────────
-  const syncPage = useCallback((
-    pageToken: string | undefined,
+  // ─── ขั้น 2: sync ทีละ batch (SSE) ───────────────────────────────
+  const syncBatch = useCallback((
+    batch: { id: string; name: string }[],
     prev: Counters,
     signal: AbortSignal,
-  ): Promise<{ nextPageToken?: string; counters: Counters; stopped: boolean }> => {
+  ): Promise<{ counters: Counters; stopped: boolean }> => {
     return new Promise(async (resolve, reject) => {
       let latest = { ...prev }
-      // ต้องได้รับ page-done หรือ done จาก server เท่านั้นถึงถือว่าสำเร็จ
       let serverSignaled = false
 
       try {
@@ -118,8 +121,7 @@ export default function AdminPage() {
           body: JSON.stringify({
             eventName,
             eventDate,
-            folderId,
-            resumeToken: pageToken,
+            files: batch,
             prevProcessed: prev.processed,
             prevFaces: prev.faces,
             prevIndexed: prev.indexed,
@@ -174,11 +176,6 @@ export default function AdminPage() {
               }
             }
 
-            if (ev.type === 'page-done') {
-              serverSignaled = true
-              resolve({ nextPageToken: ev.nextPageToken, counters: latest, stopped: false })
-              return
-            }
             if (ev.type === 'done') {
               serverSignaled = true
               resolve({ counters: latest, stopped: false })
@@ -201,7 +198,7 @@ export default function AdminPage() {
         }
       }
     })
-  }, [folderId, eventName, eventDate])
+  }, [eventName, eventDate])
 
   // ─── Main: นับ → sync ทีละ page จนครบ ─────────────────────────────
   const handleSync = async () => {
@@ -215,30 +212,33 @@ export default function AdminPage() {
     setElapsed(0)
 
     try {
-      // 1. นับรูปทั้งหมด
-      const total = await countFiles()
+      // 1. สแกนรายการไฟล์ทั้งหมด (รวมทุก subfolder)
+      const allFiles = await fetchFileList()
+      const total = allFiles.length
       if (stopRef.current) { setPhase('stopped'); return }
       if (total === 0) { toast('ไม่พบรูปภาพในโฟลเดอร์นี้', { icon: '⚠️' }); setPhase('idle'); return }
 
-      toast.success(`พบรูปทั้งหมด ${total.toLocaleString()} รูป เริ่ม Sync...`)
+      toast.success(`พบรูปทั้งหมด ${total.toLocaleString()} รูป (รวมทุกโฟลเดอร์ย่อย) เริ่ม Sync...`)
 
-      // 2. Sync ทีละ page จนครบ
+      // 2. Sync ทีละ batch จนครบ
       setPhase('syncing')
       setStartTime(Date.now())
 
-      let pageToken: string | undefined = undefined
+      const BATCH = 50            // จำนวนรูปต่อ request (พอดีกับ Vercel 300s)
+      const MAX_RETRY = 10        // retry สูงสุดต่อ batch
       let current: Counters = ZERO
-      const MAX_RETRY = 10 // retry สูงสุดต่อ page เดียว
+      let offset = 0
 
-      while (true) {
+      while (offset < total) {
         if (stopRef.current) break
 
+        const batch = allFiles.slice(offset, offset + BATCH)
         let attempt = 0
-        let result: { nextPageToken?: string; counters: Counters; stopped: boolean } | null = null
+        let result: { counters: Counters; stopped: boolean } | null = null
 
         while (attempt < MAX_RETRY) {
           try {
-            result = await syncPage(pageToken, current, abort.signal)
+            result = await syncBatch(batch, current, abort.signal)
             break
           } catch (err: unknown) {
             if ((err as Error).name === 'AbortError' || stopRef.current) {
@@ -256,16 +256,15 @@ export default function AdminPage() {
 
         if (!result || result.stopped) break
         current = result.counters
+        offset += batch.length
+      }
 
-        if (!result.nextPageToken) {
-          // ✅ ครบทุกรูปแล้ว
-          setPhase('done')
-          toast.success(`✅ Sync ครบแล้ว! ${current.processed.toLocaleString()} รูป, ${current.faces.toLocaleString()} ใบหน้า`)
-          setCurrentFile(null)
-          return
-        }
-
-        pageToken = result.nextPageToken
+      if (offset >= total) {
+        // ✅ ครบทุกรูปแล้ว
+        setPhase('done')
+        toast.success(`✅ Sync ครบแล้ว! ${current.processed.toLocaleString()} รูป, ${current.faces.toLocaleString()} ใบหน้า`)
+        setCurrentFile(null)
+        return
       }
 
       // หยุดกลางคัน

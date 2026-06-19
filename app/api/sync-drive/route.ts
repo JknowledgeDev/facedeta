@@ -1,13 +1,18 @@
 import { NextRequest } from 'next/server'
 import { addFaceToList } from '@/lib/azure-face'
 import { saveFaceMapping, isFileIndexed } from '@/lib/supabase'
-import { listImagesInFolder, downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
+import { downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
 
+interface BatchFile {
+  id: string
+  name: string
+}
+
 export interface SyncEvent {
-  type: 'progress' | 'page-done' | 'done' | 'error'
+  type: 'progress' | 'done' | 'error'
   fileName?: string
   fileId?: string
   status?: 'indexed' | 'skipped' | 'no_face' | 'error'
@@ -19,18 +24,15 @@ export interface SyncEvent {
   countSkipped?: number
   countNoFace?: number
   countError?: number
-  /** ถ้ายังมีหน้าต่อ → client จะส่ง pageToken นี้กลับมาใน request ถัดไป */
-  nextPageToken?: string
 }
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const eventName: string = body.eventName ?? ''
   const eventDate: string = body.eventDate ?? ''
-  const folderId: string = body.folderId ?? ''
-  /** pageToken จาก client เพื่อ resume หน้าถัดไป */
-  const resumeToken: string | undefined = body.resumeToken || undefined
-  /** counters สะสมจาก page ก่อนหน้า (client ส่งมาเพื่อให้นับต่อ) */
+  // batch ของไฟล์ที่ client ส่งมา index (จาก /api/sync-list)
+  const files: BatchFile[] = Array.isArray(body.files) ? body.files : []
+  // counters สะสมจาก batch ก่อนหน้า
   const prevProcessed: number = body.prevProcessed ?? 0
   const prevFaces: number = body.prevFaces ?? 0
   const prevIndexed: number = body.prevIndexed ?? 0
@@ -55,10 +57,8 @@ export async function POST(req: NextRequest) {
       const stats = () => ({ totalProcessed, totalFaces, countIndexed, countSkipped, countNoFace, countError })
 
       try {
-        // ดึงเฉพาะ 1 page ต่อ request (ป้องกัน Vercel timeout)
-        const { files, nextPageToken } = await listImagesInFolder(resumeToken, folderId || undefined)
-
         for (const file of files) {
+          // ข้ามรูปที่ index แล้ว
           if (await isFileIndexed(file.id)) {
             countSkipped++
             totalProcessed++
@@ -68,13 +68,10 @@ export async function POST(req: NextRequest) {
 
           // ── retry แต่ละรูปสูงสุด 2 รอบ ──────────────────────────────
           const MAX_FILE_RETRY = 2
-          let succeeded = false
-
           for (let attempt = 1; attempt <= MAX_FILE_RETRY; attempt++) {
             try {
-              // รอก่อน retry (ไม่รอรอบแรก)
               if (attempt > 1) {
-                await new Promise(r => setTimeout(r, 3000 * attempt))
+                await new Promise((r) => setTimeout(r, 3000 * attempt))
               }
 
               const buffer = await downloadFileAsBuffer(file.id)
@@ -84,7 +81,6 @@ export async function POST(req: NextRequest) {
                 countNoFace++
                 totalProcessed++
                 send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'no_face', ...stats() })
-                succeeded = true
                 break
               }
 
@@ -113,12 +109,10 @@ export async function POST(req: NextRequest) {
                 facesIndexed: faceResults.length,
                 ...stats(),
               })
-              succeeded = true
               break
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : 'Unknown error'
               if (attempt < MAX_FILE_RETRY) {
-                // ยังมี retry เหลือ → ส่ง event แจ้งแต่ยังไม่นับ error
                 send({
                   type: 'progress',
                   fileName: file.name,
@@ -128,7 +122,6 @@ export async function POST(req: NextRequest) {
                   ...stats(),
                 })
               } else {
-                // หมด retry แล้ว → นับเป็น error จริง
                 countError++
                 totalProcessed++
                 send({
@@ -142,20 +135,10 @@ export async function POST(req: NextRequest) {
               }
             }
           }
-
-          if (!succeeded) {
-            // ถึงแม้ retry ครบแล้ว ก็เดินต่อไปรูปถัดไป
-            continue
-          }
         }
 
-        if (nextPageToken) {
-          // ยังมีหน้าต่อ → ส่ง token กลับให้ client เรียกรอบถัดไปเอง
-          send({ type: 'page-done', nextPageToken, ...stats() })
-        } else {
-          // ครบทุกรูปแล้ว
-          send({ type: 'done', ...stats() })
-        }
+        // batch นี้เสร็จ → client จะส่ง batch ถัดไปเอง
+        send({ type: 'done', ...stats() })
       } catch (err: unknown) {
         send({ type: 'error', errorMessage: err instanceof Error ? err.message : 'Unknown error' })
       } finally {

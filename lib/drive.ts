@@ -152,6 +152,15 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
 }
 
 /**
+ * ดึงรายการไฟล์รูปทั้งหมด (รวมทุก subfolder) — id + name เท่านั้น
+ * ใช้สำหรับ sync: scan ต้นไม้ครั้งเดียว แล้วให้ client ส่งทีละ batch มา index
+ */
+export async function listAllImageFiles(folderId?: string): Promise<{ id: string; name: string }[]> {
+  const raw = await listAllImagesRecursive(folderId || FOLDER_ID)
+  return raw.map((f) => ({ id: f.id, name: f.name }))
+}
+
+/**
  * ดึงรูปทั้งหมด (รวม subfolder) เรียงใหม่สุด → เก่าสุด
  * เรียงตาม createdTime (เวลาอัปโหลด) เป็นหลัก → ทนต่อชื่อไฟล์ปนกัน
  * (LINE_/DSC_/IMG_) และเลขรอบใหม่ (IMG_9999 → IMG_0001); ชื่อไฟล์เป็นตัวตัดสิน
