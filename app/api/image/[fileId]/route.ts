@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { downloadFileAsBuffer } from '@/lib/drive'
+import { downloadFileAsBuffer, getThumbnailBuffer } from '@/lib/drive'
 import { toJpegBuffer } from '@/lib/image-utils'
 
 export const runtime = 'nodejs'
@@ -23,16 +23,24 @@ export async function GET(
   const downloadName = rawName.replace(/\.(heic|heif)$/i, '.jpg').replace(/[^\w.\-]/g, '_')
 
   try {
-    const raw = await downloadFileAsBuffer(fileId)
-
-    // แปลงเป็น JPEG (รองรับ HEIC) + resize ตามขนาดที่ขอ
-    const jpeg = await toJpegBuffer(raw, width)
-
     const headers: Record<string, string> = {
       'Content-Type': 'image/jpeg',
       // cache ใน browser/CDN 1 วัน (รูปไม่เปลี่ยน)
       'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
     }
+
+    // ── แสดงผล (ไม่ใช่ดาวน์โหลด): ใช้ thumbnailLink จาก Google CDN — เร็วมาก
+    //    ไม่ต้องดาวน์โหลดไฟล์เต็ม/แปลง HEIC (ลดเวลาจาก ~10s → <1s)
+    if (!isDownload) {
+      const thumb = await getThumbnailBuffer(fileId, width)
+      if (thumb) {
+        return new NextResponse(thumb as unknown as BodyInit, { status: 200, headers })
+      }
+    }
+
+    // ── ดาวน์โหลด หรือไม่มี thumbnail: ดาวน์โหลดไฟล์เต็ม + แปลง JPEG (คุณภาพสูง)
+    const raw = await downloadFileAsBuffer(fileId)
+    const jpeg = await toJpegBuffer(raw, width)
     if (isDownload) {
       headers['Content-Disposition'] = `attachment; filename="${downloadName}"`
     }

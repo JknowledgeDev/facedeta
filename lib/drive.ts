@@ -17,6 +17,30 @@ function getDriveClient() {
   return google.drive({ version: 'v3', auth: getAuthClient() })
 }
 
+/**
+ * ดึง "รูปย่อสำเร็จรูป" (thumbnailLink) จาก Google CDN — เร็วกว่าดาวน์โหลดไฟล์เต็ม
+ * แล้วแปลง HEIC มาก (~840ms เทียบกับ ~10s) และได้ JPEG พร้อมใช้เลย
+ * คืน null ถ้าไม่มี thumbnail; throw (404) ถ้าไฟล์ถูกลบ → ให้ proxy จัดการ
+ */
+export async function getThumbnailBuffer(fileId: string, size: number): Promise<Buffer | null> {
+  const auth = getAuthClient()
+  const drive = google.drive({ version: 'v3', auth })
+
+  const meta = await drive.files.get({ fileId, fields: 'thumbnailLink' })
+  let link = meta.data.thumbnailLink
+  if (!link) return null
+
+  // เปลี่ยนขนาด: ลงท้าย =s220 → =s<size> (Google รองรับสูงสุด ~1600)
+  const px = Math.min(Math.max(size, 100), 1600)
+  link = link.replace(/=s\d+[^/]*$/, `=s${px}`)
+
+  const tokenRes = await auth.getAccessToken()
+  const token = typeof tokenRes === 'string' ? tokenRes : tokenRes?.token
+  const res = await fetch(link, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined)
+  if (!res.ok) return null
+  return Buffer.from(await res.arrayBuffer())
+}
+
 export interface DriveFile {
   id: string
   name: string
