@@ -38,7 +38,16 @@ export async function GET(
     }
 
     return new NextResponse(jpeg as unknown as BodyInit, { status: 200, headers })
-  } catch (err) {
+  } catch (err: unknown) {
+    const code = (err as { code?: number }).code
+    const msg = err instanceof Error ? err.message : ''
+    // ไฟล์ถูกลบ/เข้าถึงไม่ได้ใน Drive → ตอบ 404 เงียบๆ (เป็นเรื่องปกติ ไม่ต้อง log รก)
+    if (code === 404 || /not found|notfound|insufficient/i.test(msg)) {
+      return NextResponse.json({ error: 'File not found' }, {
+        status: 404,
+        headers: { 'Cache-Control': 'public, max-age=86400' },
+      })
+    }
     console.error('Image proxy error:', err)
     return NextResponse.json({ error: 'Failed to load image' }, { status: 500 })
   }

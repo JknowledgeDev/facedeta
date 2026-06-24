@@ -49,6 +49,8 @@ export default function GalleryPage() {
 
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null)
   const [imgLoaded, setImgLoaded] = useState(false)
+  // รูปที่โหลดไม่ได้ (ถูกลบจาก Drive) → ซ่อนออก
+  const [broken, setBroken] = useState<Set<string>>(() => new Set())
 
   const sentinelRef = useRef<HTMLDivElement>(null)
 
@@ -104,12 +106,13 @@ export default function GalleryPage() {
     return m
   }, [manifest])
 
-  // กรองรูปตาม filter (ยังคงเรียงใหม่สุดก่อนจาก manifest)
+  // กรองรูปตาม filter + ตัดรูปที่โหลดไม่ได้ (ถูกลบจาก Drive) ออก
   const filtered = useMemo(() => {
-    if (filter.kind === 'all') return manifest
-    if (filter.kind === 'date') return manifest.filter((p) => p.date === filter.date)
-    return manifest.filter((p) => p.eventName === filter.name)
-  }, [manifest, filter])
+    let list = manifest
+    if (filter.kind === 'date') list = manifest.filter((p) => p.date === filter.date)
+    else if (filter.kind === 'event') list = manifest.filter((p) => p.eventName === filter.name)
+    return broken.size ? list.filter((p) => !broken.has(p.id)) : list
+  }, [manifest, filter, broken])
 
   // reset จำนวนที่แสดงเมื่อเปลี่ยน filter
   useEffect(() => { setVisible(PAGE) }, [filter])
@@ -306,7 +309,11 @@ export default function GalleryPage() {
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src={thumbUrl(photo.id)} alt={photo.name}
                 className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
-                loading="lazy" />
+                loading="lazy"
+                onError={() => setBroken((prev) => {
+                  if (prev.has(photo.id)) return prev
+                  const n = new Set(prev); n.add(photo.id); return n
+                })} />
               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/25 transition-colors duration-200 flex items-center justify-center">
                 <div className="w-10 h-10 bg-white/90 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 shadow">
                   <svg className="w-5 h-5 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
