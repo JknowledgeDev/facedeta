@@ -131,15 +131,14 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
   const drive = getDriveClient()
   const out: RawDriveImage[] = []
   const seenPhoto = new Set<string>()
-  const seenFolder = new Set<string>()
-  const queue: string[] = [rootFolderId]
+  const seenFolder = new Set<string>([rootFolderId])
+  const CONCURRENCY = 8 // scan พร้อมกันสูงสุด 8 โฟลเดอร์ (อยู่ใน Drive quota สบายๆ)
 
-  while (queue.length > 0) {
-    const folderId = queue.shift()!
-    if (seenFolder.has(folderId)) continue
-    seenFolder.add(folderId)
+  /** scan โฟลเดอร์เดียว: คืน subfolder ids + รูปทั้งหมดในโฟลเดอร์ */
+  async function scanFolder(folderId: string): Promise<{ subs: string[]; images: RawDriveImage[] }> {
+    const subs: string[] = []
+    const images: RawDriveImage[] = []
 
-    // 1) หา subfolder ในโฟลเดอร์นี้ → เข้าคิว
     let folderToken: string | undefined
     do {
       const res = await drive.files.list({
@@ -148,13 +147,10 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
         pageSize: 1000,
         pageToken: folderToken,
       })
-      for (const f of res.data.files ?? []) {
-        if (f.id && !seenFolder.has(f.id)) queue.push(f.id)
-      }
+      for (const f of res.data.files ?? []) if (f.id) subs.push(f.id)
       folderToken = res.data.nextPageToken ?? undefined
     } while (folderToken)
 
-    // 2) ดึงรูปในโฟลเดอร์นี้ (paginate ครบทุกหน้า)
     let photoToken: string | undefined
     do {
       const res = await drive.files.list({
@@ -164,12 +160,33 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
         pageToken: photoToken,
       })
       for (const f of res.data.files ?? []) {
-        if (!f.id || seenPhoto.has(f.id)) continue
-        seenPhoto.add(f.id)
-        out.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
+        if (f.id) images.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
       }
       photoToken = res.data.nextPageToken ?? undefined
     } while (photoToken)
+
+    return { subs, images }
+  }
+
+  // BFS ทีละชั้น — ทุกโฟลเดอร์ในชั้นเดียวกัน scan พร้อมกัน (เร็วกว่าทีละอันมาก)
+  let level: string[] = [rootFolderId]
+  while (level.length > 0) {
+    const next: string[] = []
+    for (let i = 0; i < level.length; i += CONCURRENCY) {
+      const chunk = level.slice(i, i + CONCURRENCY)
+      const results = await Promise.all(chunk.map(scanFolder))
+      for (const r of results) {
+        for (const im of r.images) {
+          if (seenPhoto.has(im.id)) continue
+          seenPhoto.add(im.id)
+          out.push(im)
+        }
+        for (const s of r.subs) {
+          if (!seenFolder.has(s)) { seenFolder.add(s); next.push(s) }
+        }
+      }
+    }
+    level = next
   }
 
   return out
