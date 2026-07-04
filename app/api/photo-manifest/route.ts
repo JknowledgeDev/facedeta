@@ -3,6 +3,9 @@ import { getGalleryPhotos } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
+// สำคัญ: GET ที่ไม่อ่าน request จะถูก Next.js cache แบบ static ตอน build
+// → รูปที่ sync ใหม่จะไม่ขึ้นจนกว่าจะ redeploy — ต้อง force-dynamic
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {

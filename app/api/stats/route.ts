@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { getStats } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
+// กัน Next.js cache แบบ static — ให้สถิติอัปเดตตามจริง
+export const dynamic = 'force-dynamic'
 
 export async function GET() {
   try {
