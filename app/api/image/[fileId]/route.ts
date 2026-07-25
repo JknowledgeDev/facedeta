@@ -20,7 +20,8 @@ export async function GET(
   // ?download=1 → ให้ browser ดาวน์โหลดไฟล์ (ผู้ปกครองเซฟรูปได้)
   const isDownload = req.nextUrl.searchParams.get('download') === '1'
   const rawName = req.nextUrl.searchParams.get('name') ?? `photo_${fileId.slice(0, 8)}`
-  const downloadName = rawName.replace(/\.(heic|heif)$/i, '.jpg').replace(/[^\w.\-]/g, '_')
+  // ไฟล์ที่ต้องแปลงเป็น JPEG ตอนส่ง (HEIC/RAW) → เปลี่ยนนามสกุลเป็น .jpg
+  const downloadName = rawName.replace(/\.(heic|heif|cr3|cr2)$/i, '.jpg').replace(/[^\w.\-]/g, '_')
 
   try {
     const headers: Record<string, string> = {

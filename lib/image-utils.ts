@@ -19,6 +19,40 @@ function isHeicBuffer(buf: Buffer): boolean {
 }
 
 /**
+ * ตรวจว่าเป็นไฟล์ RAW กล้อง Canon (CR3/CR2) จาก magic bytes
+ * - CR3: ISO-BMFF container, ftyp brand "crx"
+ * - CR2: TIFF-based, ขึ้นต้น "II" และมี "CR" ที่ byte 8
+ */
+function isRawBuffer(buf: Buffer): boolean {
+  if (buf.length < 12) return false
+  if (buf.toString('ascii', 4, 8) === 'ftyp' && buf.toString('ascii', 8, 11) === 'crx') return true
+  if (buf[0] === 0x49 && buf[1] === 0x49 && buf.toString('ascii', 8, 10) === 'CR') return true
+  return false
+}
+
+/**
+ * ดึง JPEG preview ที่ฝังในไฟล์ RAW — สแกนหา SOI(FFD8FF)..EOI(FFD9)
+ * คู่ที่ใหญ่ที่สุด (Canon CR3 ฝัง JPEG ความละเอียดเต็มไว้ในไฟล์)
+ */
+function extractEmbeddedJpeg(buf: Buffer): Buffer | null {
+  const SOI = Buffer.from([0xff, 0xd8, 0xff])
+  const EOI = Buffer.from([0xff, 0xd9])
+  let best: Buffer | null = null
+  let bestLen = 0
+  let from = 0
+  while (true) {
+    const s = buf.indexOf(SOI, from)
+    if (s === -1) break
+    const e = buf.indexOf(EOI, s + 3)
+    if (e === -1) break
+    const len = e + 2 - s
+    if (len > bestLen) { bestLen = len; best = buf.subarray(s, e + 2) }
+    from = e + 2
+  }
+  return best
+}
+
+/**
  * แปลงรูปทุกฟอร์แมต (รวมถึง HEIC) → JPEG Buffer
  *
  * @param maxSize  0 = ไม่ resize, >0 = จำกัด px longest side
@@ -37,6 +71,13 @@ export async function toJpegBuffer(
   maxBytes = 0,
 ): Promise<Buffer> {
   let buf = input
+
+  // ── RAW (CR3/CR2) → ดึง JPEG preview ที่ฝังอยู่ (ไม่ต้อง decode RAW) ──
+  if (isRawBuffer(buf)) {
+    const embedded = extractEmbeddedJpeg(buf)
+    if (!embedded) throw new Error('RAW file has no embedded JPEG preview')
+    buf = embedded
+  }
 
   // ── HEIC → JPEG (pure JS, รองรับ Windows + Vercel) ─────────────────
   if (isHeicBuffer(buf)) {

@@ -154,13 +154,22 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
     let photoToken: string | undefined
     do {
       const res = await drive.files.list({
-        q: `'${folderId}' in parents and mimeType contains 'image/' and trashed = false`,
-        fields: 'nextPageToken, files(id, name, createdTime)',
+        // รวม CR3 (Drive มองเป็น application/octet-stream ไม่ใช่ image/)
+        q: `'${folderId}' in parents and (mimeType contains 'image/' or name contains '.cr3' or name contains '.CR3') and trashed = false`,
+        fields: 'nextPageToken, files(id, name, createdTime, mimeType)',
         pageSize: 1000,
         pageToken: photoToken,
       })
       for (const f of res.data.files ?? []) {
-        if (f.id) images.push({ id: f.id, name: f.name ?? '', createdTime: f.createdTime ?? '' })
+        if (!f.id) continue
+        const name = f.name ?? ''
+        // กรองไฟล์ขยะ macOS (._xxx = AppleDouble metadata ไม่ใช่รูปจริง)
+        if (name.startsWith('._')) continue
+        // รับเฉพาะ: mimeType เป็นรูป หรือนามสกุล .cr3/.cr2 จริงๆ
+        const isImage = (f.mimeType ?? '').startsWith('image/')
+        const isRaw = /\.(cr3|cr2)$/i.test(name)
+        if (!isImage && !isRaw) continue
+        images.push({ id: f.id, name, createdTime: f.createdTime ?? '' })
       }
       photoToken = res.data.nextPageToken ?? undefined
     } while (photoToken)
