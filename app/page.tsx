@@ -8,62 +8,9 @@ import StatsBar from '@/components/StatsBar'
 import ThresholdSlider from '@/components/ThresholdSlider'
 import { type SearchResult } from '@/lib/supabase'
 import { apiUrl } from '@/lib/api-url'
+import { compressIfNeeded } from '@/lib/client-compress'
 
 type Status = 'idle' | 'searching' | 'done'
-
-// Vercel limits request body to ~4.5 MB — compress non-HEIC images in the browser first
-const MAX_UPLOAD_BYTES = 4 * 1024 * 1024 // 4 MB safe threshold
-
-async function compressIfNeeded(file: File): Promise<Blob> {
-  const isHeic = file.name.toLowerCase().endsWith('.heic') ||
-    file.name.toLowerCase().endsWith('.heif')
-
-  // HEIC: browser can't render it → send as-is (usually already <4 MB)
-  if (isHeic) return file
-
-  // Already small enough → send as-is
-  if (file.size <= MAX_UPLOAD_BYTES) return file
-
-  return new Promise((resolve) => {
-    const img = new Image()
-    const url = URL.createObjectURL(file)
-
-    img.onload = () => {
-      URL.revokeObjectURL(url)
-      const canvas = document.createElement('canvas')
-
-      // Cap longest side at 1920 px to reduce size while keeping face detail
-      const MAX_DIM = 1920
-      let { width, height } = img
-      if (width > MAX_DIM || height > MAX_DIM) {
-        if (width >= height) { height = Math.round(height * MAX_DIM / width); width = MAX_DIM }
-        else { width = Math.round(width * MAX_DIM / height); height = MAX_DIM }
-      }
-
-      canvas.width = width
-      canvas.height = height
-      canvas.getContext('2d')!.drawImage(img, 0, 0, width, height)
-
-      // Try quality 0.90 → 0.80 → ... until under limit
-      let quality = 0.9
-      const tryNext = () => {
-        canvas.toBlob((blob) => {
-          if (!blob) { resolve(file); return }
-          if (blob.size <= MAX_UPLOAD_BYTES || quality <= 0.5) {
-            resolve(blob)
-          } else {
-            quality = Math.round((quality - 0.1) * 10) / 10
-            tryNext()
-          }
-        }, 'image/jpeg', quality)
-      }
-      tryNext()
-    }
-
-    img.onerror = () => { URL.revokeObjectURL(url); resolve(file) }
-    img.src = url
-  })
-}
 
 export default function SearchPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
