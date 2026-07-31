@@ -62,6 +62,89 @@ export default function AdminPage() {
   const [uploadEventName, setUploadEventName] = useState('')
   const [uploadEventDate, setUploadEventDate] = useState('')
 
+  // กิจกรรมที่มีอยู่ (autocomplete + จัดการชื่อ)
+  interface EventInfo { name: string; dates: string[]; count: number }
+  const [existingEvents, setExistingEvents] = useState<EventInfo[]>([])
+  const [eventsVersion, setEventsVersion] = useState(0)
+  const [showEventManager, setShowEventManager] = useState(false)
+  const [editingEvent, setEditingEvent] = useState<string | null>(null)
+  const [editValue, setEditValue] = useState('')
+  const [renaming, setRenaming] = useState(false)
+
+  // โหลดรายชื่อกิจกรรม (ใช้ทั้ง autocomplete และตัวจัดการ)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(apiUrl('/api/events'))
+        if (res.ok) {
+          const d = await res.json()
+          setExistingEvents(
+            (d.events ?? []).map((e: { name: string; dates?: string[]; count?: number }) => ({
+              name: e.name,
+              dates: e.dates ?? [],
+              count: e.count ?? 0,
+            })).sort((a: EventInfo, b: EventInfo) => b.count - a.count)
+          )
+        }
+      } catch { /* ignore */ }
+    })()
+  }, [eventsVersion])
+
+  // จำชื่อกิจกรรม/วันที่ล่าสุด — ไม่ต้องกรอกใหม่ทุกครั้ง
+  useEffect(() => {
+    try {
+      const u = JSON.parse(localStorage.getItem('fd_last_upload_event') ?? '{}')
+      if (u.name) setUploadEventName(u.name)
+      if (u.date) setUploadEventDate(u.date)
+      const s = JSON.parse(localStorage.getItem('fd_last_sync_event') ?? '{}')
+      if (s.name) setEventName(s.name)
+      if (s.date) setEventDate(s.date)
+    } catch { /* ignore */ }
+  }, [])
+  useEffect(() => {
+    localStorage.setItem('fd_last_upload_event', JSON.stringify({ name: uploadEventName, date: uploadEventDate }))
+  }, [uploadEventName, uploadEventDate])
+  useEffect(() => {
+    localStorage.setItem('fd_last_sync_event', JSON.stringify({ name: eventName, date: eventDate }))
+  }, [eventName, eventDate])
+
+  /** เมื่อเลือกชื่อกิจกรรมที่มีอยู่ → เติมวันที่ล่าสุดของกิจกรรมนั้นให้อัตโนมัติ */
+  const autofillDate = (name: string, currentDate: string, setDate: (d: string) => void) => {
+    if (currentDate) return
+    const ev = existingEvents.find((e) => e.name === name)
+    const latest = ev?.dates.slice().sort().reverse()[0]
+    if (latest) setDate(latest)
+  }
+
+  /** เปลี่ยนชื่อ/รวมกิจกรรม */
+  const handleRename = async (from: string) => {
+    const to = editValue.trim()
+    if (!to || to === from) { setEditingEvent(null); return }
+    const isMerge = existingEvents.some((e) => e.name === to)
+    if (isMerge && !window.confirm(`มีกิจกรรม "${to}" อยู่แล้ว — ต้องการรวม "${from}" เข้ากับ "${to}" ใช่ไหม?`)) {
+      return
+    }
+    setRenaming(true)
+    try {
+      const res = await fetch(apiUrl('/api/events/rename'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from, to }),
+      })
+      const d = await res.json()
+      if (!res.ok) throw new Error(d.error ?? 'เปลี่ยนชื่อไม่สำเร็จ')
+      toast.success(isMerge
+        ? `รวม "${from}" เข้ากับ "${to}" แล้ว (${d.updated} รายการ)`
+        : `เปลี่ยนชื่อเป็น "${to}" แล้ว (${d.updated} รายการ)`)
+      setEditingEvent(null)
+      setEventsVersion((v) => v + 1)
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
+    } finally {
+      setRenaming(false)
+    }
+  }
+
   // Sync state
   const [phase, setPhase] = useState<Phase>('idle')
   const [totalFiles, setTotalFiles] = useState(0)
@@ -462,8 +545,11 @@ export default function AdminPage() {
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium text-gray-600 block mb-1">ชื่อกิจกรรม</label>
-                <input type="text" placeholder="เช่น Medcamp 2567" value={eventName}
-                  onChange={(e) => setEventName(e.target.value)}
+                <input type="text" placeholder="เช่น Medcamp 2567" value={eventName} list="event-names"
+                  onChange={(e) => {
+                    setEventName(e.target.value)
+                    autofillDate(e.target.value, eventDate, setEventDate)
+                  }}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
               </div>
               <div>
@@ -535,8 +621,11 @@ export default function AdminPage() {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium text-gray-600 block mb-1">ชื่อกิจกรรม</label>
-            <input type="text" placeholder="เช่น Medcamp 2569" value={uploadEventName}
-              onChange={(e) => setUploadEventName(e.target.value)}
+            <input type="text" placeholder="เช่น Medcamp 2569" value={uploadEventName} list="event-names"
+              onChange={(e) => {
+                setUploadEventName(e.target.value)
+                autofillDate(e.target.value, uploadEventDate, setUploadEventDate)
+              }}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-green-500" />
           </div>
           <div>
@@ -548,6 +637,89 @@ export default function AdminPage() {
 
         <MultiUpload eventName={uploadEventName} eventDate={uploadEventDate} />
       </div>
+
+      {/* Autocomplete รายชื่อกิจกรรมที่มีอยู่ (ใช้ร่วมทั้ง sync และอัพโหลด) */}
+      <datalist id="event-names">
+        {existingEvents.map((ev) => (
+          <option key={ev.name} value={ev.name}>{`${ev.count} รูป`}</option>
+        ))}
+      </datalist>
+
+      {/* ── จัดการชื่อกิจกรรม (เปลี่ยนชื่อ/รวมกิจกรรมซ้ำ) ── */}
+      {existingEvents.length > 0 && (
+        <div className="bg-white rounded-2xl shadow-sm border border-green-100 overflow-hidden">
+          <button onClick={() => setShowEventManager((v) => !v)}
+            className="w-full flex items-center justify-between px-5 py-4 hover:bg-gray-50 transition-colors">
+            <span className="font-semibold text-gray-700 text-sm flex items-center gap-2">
+              <svg className="w-4 h-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a2 2 0 012-2z" />
+              </svg>
+              จัดการชื่อกิจกรรม
+            </span>
+            <span className="flex items-center gap-2 text-xs text-gray-400">
+              {existingEvents.length} กิจกรรม
+              <svg className={`w-4 h-4 transition-transform ${showEventManager ? 'rotate-180' : ''}`}
+                fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </span>
+          </button>
+
+          {showEventManager && (
+            <div className="border-t border-gray-100">
+              <p className="text-xs text-gray-400 px-5 pt-3">
+                💡 พิมพ์ชื่อใหม่เป็นชื่อกิจกรรมที่มีอยู่แล้ว = รวมสองกิจกรรมเข้าด้วยกัน
+              </p>
+              <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+                {existingEvents.map((ev) => (
+                  <div key={ev.name} className="flex items-center justify-between px-5 py-2.5 gap-2">
+                    {editingEvent === ev.name ? (
+                      <>
+                        <input
+                          type="text" value={editValue} autoFocus list="event-names"
+                          onChange={(e) => setEditValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleRename(ev.name)
+                            if (e.key === 'Escape') setEditingEvent(null)
+                          }}
+                          className="flex-1 border border-green-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-green-500"
+                        />
+                        <button onClick={() => handleRename(ev.name)} disabled={renaming}
+                          className="text-xs px-3 py-1.5 bg-green-600 hover:bg-green-700 disabled:bg-gray-300 text-white rounded-lg font-medium transition-colors shrink-0">
+                          {renaming ? '...' : 'บันทึก'}
+                        </button>
+                        <button onClick={() => setEditingEvent(null)}
+                          className="text-xs px-2 py-1.5 text-gray-400 hover:text-gray-600 transition-colors shrink-0">
+                          ยกเลิก
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-700 truncate">{ev.name}</p>
+                          <p className="text-xs text-gray-400">
+                            {ev.count.toLocaleString()} รูป{ev.dates.length > 0 ? ` • ${ev.dates.slice().sort().reverse()[0]}` : ''}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => { setEditingEvent(ev.name); setEditValue(ev.name) }}
+                          className="text-xs px-3 py-1.5 bg-gray-50 hover:bg-gray-100 text-gray-600 rounded-lg font-medium transition-colors shrink-0 flex items-center gap-1">
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                              d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931z" />
+                          </svg>
+                          แก้ชื่อ
+                        </button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Log */}
       {log.length > 0 && (

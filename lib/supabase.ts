@@ -27,7 +27,7 @@ export interface GalleryPhoto {
 
 /**
  * ดึงรูปทั้งหมดที่เคย sync เข้าระบบ (จากทุกโฟลเดอร์/ทุก URL)
- * อ่านจาก face_index → distinct ตาม drive_file_id (รูปเดียวอาจมีหลายใบหน้า)
+ * อ่านจาก photo_index → "ทุกรูป" รวมรูปที่ไม่มีใบหน้าด้วย (1 แถว = 1 รูป)
  * เรียงใหม่สุดก่อน: event_date ลง, ชื่อไฟล์ลง
  * (paginate ทีละ 1000 แถว เพราะ Supabase จำกัด default 1000)
  */
@@ -39,7 +39,7 @@ export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
 
   while (true) {
     const { data, error } = await supabase
-      .from('face_index')
+      .from('photo_index')
       .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
       .range(from, from + SIZE - 1)
 
@@ -119,6 +119,68 @@ export async function saveFaceMapping(data: {
   if (error) throw new Error(`Supabase saveFaceMapping: ${error.message}`)
 }
 
+// บันทึก "1 รูป" ลง photo_index (เก็บทุกรูป แม้ไม่มีใบหน้า)
+// เรียกทั้งกรณี index สำเร็จ (hasFace=true) และไม่พบใบหน้า (hasFace=false)
+export async function savePhotoIndex(data: {
+  driveFileId: string
+  fileName?: string
+  eventName?: string
+  eventDate?: string
+  thumbnailUrl?: string
+  hasFace: boolean
+  faceCount: number
+}): Promise<void> {
+  const supabase = getSupabaseAdmin()
+  const { error } = await supabase.from('photo_index').upsert(
+    {
+      drive_file_id: data.driveFileId,
+      file_name: data.fileName ?? null,
+      event_name: data.eventName ?? null,
+      event_date: data.eventDate ?? null,
+      thumbnail_url: data.thumbnailUrl ?? null,
+      has_face: data.hasFace,
+      face_count: data.faceCount,
+    },
+    { onConflict: 'drive_file_id' }
+  )
+  if (error) throw new Error(`Supabase savePhotoIndex: ${error.message}`)
+}
+
+/**
+ * เปลี่ยนชื่อกิจกรรม (ทั้ง face_index และ photo_index)
+ * ถ้าชื่อใหม่ตรงกับกิจกรรมอื่นที่มีอยู่ = รวมกิจกรรมเข้าด้วยกัน
+ * คืนจำนวนแถวที่ถูกเปลี่ยน
+ */
+export async function renameEvent(from: string, to: string): Promise<number> {
+  const supabase = getSupabaseAdmin()
+
+  const { count: c1, error: e1 } = await supabase
+    .from('face_index')
+    .update({ event_name: to }, { count: 'exact' })
+    .eq('event_name', from)
+  if (e1) throw new Error(`renameEvent face_index: ${e1.message}`)
+
+  const { count: c2, error: e2 } = await supabase
+    .from('photo_index')
+    .update({ event_name: to }, { count: 'exact' })
+    .eq('event_name', from)
+  if (e2) throw new Error(`renameEvent photo_index: ${e2.message}`)
+
+  return (c1 ?? 0) + (c2 ?? 0)
+}
+
+// ตรวจว่า driveFileId ถูกประมวลผล (sync) แล้วหรือยัง — เช็คจาก photo_index
+// ครอบคลุมทั้งรูปที่มีหน้าและไม่มีหน้า จึงไม่ดึงรูปเดิมมาประมวลผลซ้ำ
+export async function isPhotoProcessed(driveFileId: string): Promise<boolean> {
+  const supabase = getSupabaseAdmin()
+  const { count } = await supabase
+    .from('photo_index')
+    .select('*', { count: 'exact', head: true })
+    .eq('drive_file_id', driveFileId)
+
+  return (count ?? 0) > 0
+}
+
 // ค้นหา records จาก faceIds ที่ได้จาก Rekognition
 export async function getFaceRecordsByIds(faceIds: string[]): Promise<FaceIndexRow[]> {
   if (faceIds.length === 0) return []
@@ -143,7 +205,7 @@ export async function isFileIndexed(driveFileId: string): Promise<boolean> {
   return (count ?? 0) > 0
 }
 
-// ลบ records ของ driveFileId
+// ลบ records ของ driveFileId (ทั้ง face_index และ photo_index)
 export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<string[]> {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
@@ -153,6 +215,14 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
     .select('face_id')
 
   if (error) throw new Error(`Supabase deleteFaceMappings: ${error.message}`)
+
+  // ลบออกจาก photo_index ด้วย เพื่อให้แกลเลอรี/สถิติไม่ค้าง
+  const { error: pErr } = await supabase
+    .from('photo_index')
+    .delete()
+    .eq('drive_file_id', driveFileId)
+  if (pErr) throw new Error(`Supabase deletePhotoIndex: ${pErr.message}`)
+
   return (data ?? []).map((r: { face_id: string }) => r.face_id)
 }
 
@@ -169,7 +239,7 @@ export async function getEventsByDate(): Promise<Record<string, string[]>> {
 
   while (true) {
     const { data, error } = await supabase
-      .from('face_index')
+      .from('photo_index')
       .select('event_date, event_name')
       .not('event_date', 'is', null)
       .range(from, from + SIZE - 1)
@@ -214,7 +284,7 @@ export async function getEventsList(): Promise<EventSummary[]> {
 
   while (true) {
     const { data, error } = await supabase
-      .from('face_index')
+      .from('photo_index')
       .select('event_name, event_date, drive_file_id')
       .not('event_name', 'is', null)
       .range(from, from + SIZE - 1)
@@ -287,6 +357,8 @@ export async function logSearch(matchCount: number, threshold: number): Promise<
 export async function getStats(): Promise<{
   totalFaces: number
   totalPhotos: number
+  totalPhotosWithFace: number
+  totalPhotosNoFace: number
   totalEvents: number
   totalSearches: number
 }> {
@@ -295,6 +367,8 @@ export async function getStats(): Promise<{
   return {
     totalFaces: data?.total_faces_indexed ?? 0,
     totalPhotos: data?.total_photos ?? 0,
+    totalPhotosWithFace: data?.total_photos_with_face ?? 0,
+    totalPhotosNoFace: data?.total_photos_no_face ?? 0,
     totalEvents: data?.total_events ?? 0,
     totalSearches: data?.total_searches ?? 0,
   }
