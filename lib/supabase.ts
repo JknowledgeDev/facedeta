@@ -25,13 +25,17 @@ export interface GalleryPhoto {
   uploadedAt: string      // เวลา sync เข้าระบบ
 }
 
+/** ตรวจว่า error จาก Supabase คือ "ตารางไม่มีอยู่" (ยังไม่ได้รัน schema.sql) */
+function isMissingTable(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false
+  return error.code === 'PGRST205' || /could not find the table/i.test(error.message ?? '')
+}
+
 /**
- * ดึงรูปทั้งหมดที่เคย sync เข้าระบบ (จากทุกโฟลเดอร์/ทุก URL)
- * อ่านจาก photo_index → "ทุกรูป" รวมรูปที่ไม่มีใบหน้าด้วย (1 แถว = 1 รูป)
- * เรียงใหม่สุดก่อน: event_date ลง, ชื่อไฟล์ลง
- * (paginate ทีละ 1000 แถว เพราะ Supabase จำกัด default 1000)
+ * อ่านรูปทีละหน้า (1000 แถว) จากตารางที่กำหนด → รวมเป็น GalleryPhoto dedupe ตาม id
+ * คืน null ถ้าตารางไม่มีอยู่ (ให้ caller fallback ไปตารางอื่น)
  */
-export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
+async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<GalleryPhoto[] | null> {
   const supabase = getSupabaseAdmin()
   const byId = new Map<string, GalleryPhoto>()
   const SIZE = 1000
@@ -39,11 +43,15 @@ export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
 
   while (true) {
     const { data, error } = await supabase
-      .from('photo_index')
+      .from(table)
       .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
       .range(from, from + SIZE - 1)
 
-    if (error || !data || data.length === 0) break
+    if (error) {
+      if (isMissingTable(error)) return null
+      break
+    }
+    if (!data || data.length === 0) break
 
     for (const row of data) {
       const r = row as {
@@ -67,7 +75,22 @@ export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
     from += SIZE
   }
 
-  const out = Array.from(byId.values())
+  return Array.from(byId.values())
+}
+
+/**
+ * ดึงรูปทั้งหมดที่เคย sync เข้าระบบ (จากทุกโฟลเดอร์/ทุก URL)
+ * หลัก: photo_index ("ทุกรูป" รวมรูปไม่มีหน้า) — fallback: face_index
+ * (เข้ากันได้ทั้งก่อน/หลังรัน schema.sql สร้าง photo_index)
+ * เรียงใหม่สุดก่อน: event_date ลง, ชื่อไฟล์ลง
+ */
+export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
+  // ลอง photo_index ก่อน — ถ้าตารางยังไม่มี (null) หรือว่างเปล่า → ใช้ face_index
+  let out = await readGalleryFrom('photo_index')
+  if (!out || out.length === 0) {
+    out = (await readGalleryFrom('face_index')) ?? []
+  }
+
   // ใหม่สุดก่อน: วันกิจกรรมลง, ชื่อไฟล์ numeric ลง, เวลา sync ลง
   out.sort((a, b) => {
     const byDate = (b.date || '').localeCompare(a.date || '')
@@ -143,6 +166,8 @@ export async function savePhotoIndex(data: {
     },
     { onConflict: 'drive_file_id' }
   )
+  // ตารางยังไม่ถูกสร้าง (ยังไม่รัน schema.sql) → ข้ามเงียบๆ ไม่ให้ sync/upload ล้ม
+  if (error && isMissingTable(error)) return
   if (error) throw new Error(`Supabase savePhotoIndex: ${error.message}`)
 }
 
@@ -164,21 +189,25 @@ export async function renameEvent(from: string, to: string): Promise<number> {
     .from('photo_index')
     .update({ event_name: to }, { count: 'exact' })
     .eq('event_name', from)
-  if (e2) throw new Error(`renameEvent photo_index: ${e2.message}`)
+  // ตาราง photo_index ยังไม่มี → เปลี่ยนเฉพาะ face_index พอ
+  if (e2 && !isMissingTable(e2)) throw new Error(`renameEvent photo_index: ${e2.message}`)
 
   return (c1 ?? 0) + (c2 ?? 0)
 }
 
-// ตรวจว่า driveFileId ถูกประมวลผล (sync) แล้วหรือยัง — เช็คจาก photo_index
-// ครอบคลุมทั้งรูปที่มีหน้าและไม่มีหน้า จึงไม่ดึงรูปเดิมมาประมวลผลซ้ำ
+// ตรวจว่า driveFileId ถูกประมวลผล (sync) แล้วหรือยัง
+// เช็ค photo_index ก่อน (ครอบคลุมรูปไม่มีหน้า) → fallback face_index
+// (รูปเก่าที่ index ก่อนมี photo_index จะอยู่แค่ใน face_index — ต้องไม่ประมวลผลซ้ำ)
 export async function isPhotoProcessed(driveFileId: string): Promise<boolean> {
   const supabase = getSupabaseAdmin()
-  const { count } = await supabase
+  const { count, error } = await supabase
     .from('photo_index')
     .select('*', { count: 'exact', head: true })
     .eq('drive_file_id', driveFileId)
 
-  return (count ?? 0) > 0
+  if (!error && (count ?? 0) > 0) return true
+  // ไม่พบใน photo_index (หรือตารางยังไม่มี) → เช็ค face_index ด้วย
+  return isFileIndexed(driveFileId)
 }
 
 // ค้นหา records จาก faceIds ที่ได้จาก Rekognition
@@ -221,7 +250,7 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
     .from('photo_index')
     .delete()
     .eq('drive_file_id', driveFileId)
-  if (pErr) throw new Error(`Supabase deletePhotoIndex: ${pErr.message}`)
+  if (pErr && !isMissingTable(pErr)) throw new Error(`Supabase deletePhotoIndex: ${pErr.message}`)
 
   return (data ?? []).map((r: { face_id: string }) => r.face_id)
 }
@@ -233,34 +262,45 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
  */
 export async function getEventsByDate(): Promise<Record<string, string[]>> {
   const supabase = getSupabaseAdmin()
-  const map: Record<string, Set<string>> = {}
-  const SIZE = 1000
-  let from = 0
 
-  while (true) {
-    const { data, error } = await supabase
-      .from('photo_index')
-      .select('event_date, event_name')
-      .not('event_date', 'is', null)
-      .range(from, from + SIZE - 1)
+  const readFrom = async (table: 'photo_index' | 'face_index') => {
+    const map: Record<string, Set<string>> = {}
+    const SIZE = 1000
+    let from = 0
+    let sawRows = false
 
-    if (error || !data || data.length === 0) break
+    while (true) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('event_date, event_name')
+        .not('event_date', 'is', null)
+        .range(from, from + SIZE - 1)
 
-    for (const row of data) {
-      const ed = (row as { event_date: string | null }).event_date
-      const en = (row as { event_name: string | null }).event_name
-      if (!ed) continue
-      const date = ed.slice(0, 10)
-      if (!map[date]) map[date] = new Set()
-      if (en) map[date].add(en)
+      if (error) return isMissingTable(error) ? null : { map, sawRows }
+      if (!data || data.length === 0) break
+      sawRows = true
+
+      for (const row of data) {
+        const ed = (row as { event_date: string | null }).event_date
+        const en = (row as { event_name: string | null }).event_name
+        if (!ed) continue
+        const date = ed.slice(0, 10)
+        if (!map[date]) map[date] = new Set()
+        if (en) map[date].add(en)
+      }
+
+      if (data.length < SIZE) break
+      from += SIZE
     }
-
-    if (data.length < SIZE) break
-    from += SIZE
+    return { map, sawRows }
   }
 
+  // photo_index ก่อน → ถ้าตารางไม่มี/ว่าง ใช้ face_index (เข้ากันได้ทั้งสองสถานะ)
+  let res = await readFrom('photo_index')
+  if (!res || !res.sawRows) res = await readFrom('face_index')
+
   const out: Record<string, string[]> = {}
-  for (const [k, v] of Object.entries(map)) out[k] = Array.from(v)
+  if (res) for (const [k, v] of Object.entries(res.map)) out[k] = Array.from(v)
   return out
 }
 
@@ -278,33 +318,45 @@ export interface EventSummary {
  */
 export async function getEventsList(): Promise<EventSummary[]> {
   const supabase = getSupabaseAdmin()
-  const m = new Map<string, { dates: Set<string>; files: Set<string> }>()
-  const SIZE = 1000
-  let from = 0
 
-  while (true) {
-    const { data, error } = await supabase
-      .from('photo_index')
-      .select('event_name, event_date, drive_file_id')
-      .not('event_name', 'is', null)
-      .range(from, from + SIZE - 1)
+  const readFrom = async (table: 'photo_index' | 'face_index') => {
+    const m = new Map<string, { dates: Set<string>; files: Set<string> }>()
+    const SIZE = 1000
+    let from = 0
+    let sawRows = false
 
-    if (error || !data || data.length === 0) break
+    while (true) {
+      const { data, error } = await supabase
+        .from(table)
+        .select('event_name, event_date, drive_file_id')
+        .not('event_name', 'is', null)
+        .range(from, from + SIZE - 1)
 
-    for (const row of data) {
-      const name = (row as { event_name: string | null }).event_name
-      const ed = (row as { event_date: string | null }).event_date
-      const fid = (row as { drive_file_id: string | null }).drive_file_id
-      if (!name) continue
-      if (!m.has(name)) m.set(name, { dates: new Set(), files: new Set() })
-      const e = m.get(name)!
-      if (ed) e.dates.add(ed.slice(0, 10))
-      if (fid) e.files.add(fid)
+      if (error) return isMissingTable(error) ? null : { m, sawRows }
+      if (!data || data.length === 0) break
+      sawRows = true
+
+      for (const row of data) {
+        const name = (row as { event_name: string | null }).event_name
+        const ed = (row as { event_date: string | null }).event_date
+        const fid = (row as { drive_file_id: string | null }).drive_file_id
+        if (!name) continue
+        if (!m.has(name)) m.set(name, { dates: new Set(), files: new Set() })
+        const e = m.get(name)!
+        if (ed) e.dates.add(ed.slice(0, 10))
+        if (fid) e.files.add(fid)
+      }
+
+      if (data.length < SIZE) break
+      from += SIZE
     }
-
-    if (data.length < SIZE) break
-    from += SIZE
+    return { m, sawRows }
   }
+
+  // photo_index ก่อน → ตารางไม่มี/ว่าง fallback ไป face_index
+  let res = await readFrom('photo_index')
+  if (!res || !res.sawRows) res = await readFrom('face_index')
+  const m = res?.m ?? new Map<string, { dates: Set<string>; files: Set<string> }>()
 
   return Array.from(m.entries()).map(([name, v]) => ({
     name,
