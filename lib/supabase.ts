@@ -40,11 +40,15 @@ async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<Gal
   const byId = new Map<string, GalleryPhoto>()
   const SIZE = 1000
   let from = 0
+  // สำคัญ: paginate ด้วย .range() ต้องมี .order() ด้วย unique key เสมอ
+  // ไม่งั้น Postgres ไม่รับประกันลำดับ → แถวสลับหน้า → บางรูป "หาย" จากผลลัพธ์
+  const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
 
   while (true) {
     const { data, error } = await supabase
       .from(table)
       .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
+      .order(orderCol, { ascending: true })
       .range(from, from + SIZE - 1)
 
     if (error) {
@@ -268,12 +272,14 @@ export async function getEventsByDate(): Promise<Record<string, string[]>> {
     const SIZE = 1000
     let from = 0
     let sawRows = false
+    const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
 
     while (true) {
       const { data, error } = await supabase
         .from(table)
         .select('event_date, event_name')
         .not('event_date', 'is', null)
+        .order(orderCol, { ascending: true })
         .range(from, from + SIZE - 1)
 
       if (error) return isMissingTable(error) ? null : { map, sawRows }
@@ -324,12 +330,14 @@ export async function getEventsList(): Promise<EventSummary[]> {
     const SIZE = 1000
     let from = 0
     let sawRows = false
+    const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
 
     while (true) {
       const { data, error } = await supabase
         .from(table)
         .select('event_name, event_date, drive_file_id')
         .not('event_name', 'is', null)
+        .order(orderCol, { ascending: true })
         .range(from, from + SIZE - 1)
 
       if (error) return isMissingTable(error) ? null : { m, sawRows }
@@ -381,6 +389,7 @@ export async function getUploadTimesByFile(): Promise<Record<string, string>> {
     const { data, error } = await supabase
       .from('face_index')
       .select('drive_file_id, uploaded_at')
+      .order('id', { ascending: true })
       .range(from, from + SIZE - 1)
 
     if (error || !data || data.length === 0) break
