@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { downloadFileAsBuffer, getThumbnailBuffer } from '@/lib/drive'
 import { toJpegBuffer } from '@/lib/image-utils'
-import { uploadThumbInBackground, THUMB_SIZE } from '@/lib/thumbs'
+import { cacheTierInBackground, findCachedUrl, toFullJpeg, THUMB_SIZE, type Tier } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 
@@ -31,25 +31,46 @@ export async function GET(
       'Cache-Control': 'public, max-age=86400, s-maxage=31536000, stale-while-revalidate=604800',
     }
 
-    // ── แสดงผล (ไม่ใช่ดาวน์โหลด): ใช้ thumbnailLink จาก Google CDN — เร็วมาก
-    //    ไม่ต้องดาวน์โหลดไฟล์เต็ม/แปลง HEIC (ลดเวลาจาก ~10s → <1s)
+    // ระดับที่ต้องการ: ดาวน์โหลด → ต้นฉบับเต็ม, ขนาดใหญ่ → 2000px, เล็ก → 500px
+    const tier: Tier = isDownload ? 'original' : width > THUMB_SIZE + 100 ? 'display' : 'thumb'
+
+    // ── 1) สำเนาบน Supabase CDN (ที่เก็บรูปจริงของระบบ — Drive อาจถูกลบหลัง sync)
+    //    redirect ให้ browser โหลดตรงจาก CDN (เร็ว, ไม่ผ่าน serverless)
+    const cached = await findCachedUrl(fileId, tier)
+    if (cached) {
+      // Supabase รองรับ ?download=<ชื่อไฟล์> → ส่งเป็น attachment ให้ผู้ปกครองเซฟได้
+      const target = isDownload ? `${cached}?download=${encodeURIComponent(downloadName)}` : cached
+      return new NextResponse(null, {
+        status: 302,
+        headers: {
+          Location: target,
+          // browser cache redirect 1 วัน + Vercel edge 1 ปี → ครั้งต่อไปไม่ต้อง HEAD storage
+          'Cache-Control': 'public, max-age=86400, s-maxage=31536000',
+        },
+      })
+    }
+
+    // ── 2) ยังไม่มีสำเนา (รูปเก่าที่ยังไม่ backfill): ดึงจาก Google Drive แล้วเติม cache
     if (!isDownload) {
+      // thumbnailLink จาก Google — เร็ว ไม่ต้องดาวน์โหลดไฟล์เต็ม/แปลง HEIC
       const thumb = await getThumbnailBuffer(fileId, width)
       if (thumb) {
-        // เก็บลง CDN cache (Supabase Storage) ให้ครั้งต่อไปโหลดตรงไม่ผ่าน proxy
-        if (width <= THUMB_SIZE + 100) uploadThumbInBackground(fileId, thumb)
+        cacheTierInBackground(tier, fileId, thumb)
         return new NextResponse(thumb as unknown as BodyInit, { status: 200, headers })
       }
     }
 
-    // ── ดาวน์โหลด หรือไม่มี thumbnail: ดาวน์โหลดไฟล์เต็ม + แปลง JPEG (คุณภาพสูง)
+    // ดาวน์โหลดไฟล์เต็มจาก Drive
     const raw = await downloadFileAsBuffer(fileId)
-    const jpeg = await toJpegBuffer(raw, width)
-    if (!isDownload && width <= THUMB_SIZE + 100) uploadThumbInBackground(fileId, jpeg)
     if (isDownload) {
+      // ต้นฉบับเต็มความละเอียด (JPG = ไฟล์เดิมทุก byte, HEIC/RAW → JPEG q92)
+      const full = await toFullJpeg(raw)
+      cacheTierInBackground('original', fileId, full)
       headers['Content-Disposition'] = `attachment; filename="${downloadName}"`
+      return new NextResponse(full as unknown as BodyInit, { status: 200, headers })
     }
-
+    const jpeg = await toJpegBuffer(raw, width)
+    cacheTierInBackground(tier, fileId, jpeg)
     return new NextResponse(jpeg as unknown as BodyInit, { status: 200, headers })
   } catch (err: unknown) {
     const code = (err as { code?: number }).code

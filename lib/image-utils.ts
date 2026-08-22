@@ -69,6 +69,7 @@ export async function toJpegBuffer(
   input: Buffer,
   maxSize = 0,
   maxBytes = 0,
+  quality = 85,   // คุณภาพ JPEG (ใช้เมื่อไม่มี maxBytes)
 ): Promise<Buffer> {
   let buf = input
 
@@ -88,7 +89,7 @@ export async function toJpegBuffer(
 
   // ── ไม่มี constraint → เร็วสุด: แค่ rotate + convert ──────────────
   if (maxSize === 0 && maxBytes === 0) {
-    return sharp(buf).rotate().jpeg({ quality: 85 }).toBuffer()
+    return sharp(buf).rotate().jpeg({ quality }).toBuffer()
   }
 
   // ── มีแค่ maxSize (เช่น image proxy /api/image) ─────────────────────
@@ -96,13 +97,13 @@ export async function toJpegBuffer(
     return sharp(buf)
       .rotate()
       .resize(maxSize, maxSize, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality: 85 })
+      .jpeg({ quality })
       .toBuffer()
   }
 
   // ── มี maxBytes (ส่งให้ AWS Rekognition) ────────────────────────────
   // Step 1: ลองแปลงแบบไม่ resize ก่อน (เส้นทางที่เร็วและเกิดบ่อยสุด)
-  const full = await sharp(buf).rotate().jpeg({ quality: 85 }).toBuffer()
+  const full = await sharp(buf).rotate().jpeg({ quality }).toBuffer()
   if (full.length <= maxBytes) {
     // รูปเล็กพอแล้ว → ไม่ต้อง resize เลย
     return full

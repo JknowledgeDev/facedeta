@@ -3,7 +3,7 @@ import { addFaceToList, trainFaceList } from '@/lib/azure-face'
 import { saveFaceMapping, savePhotoIndex, isPhotoProcessed } from '@/lib/supabase'
 import { uploadFileToDrive, getDriveThumbnailUrl } from '@/lib/drive'
 import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
-import { uploadThumbSafe } from '@/lib/thumbs'
+import { cacheAllSizesSafe } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -33,9 +33,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ message: 'File already indexed', fileId: driveFile.id, facesIndexed: 0 })
     }
 
-    // 3. แปลงครั้งเดียว → cache thumbnail ลง CDN + index ใบหน้า
-    const jpeg = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
-    await uploadThumbSafe(driveFile.id!, jpeg)
+    // 3. เก็บสำเนาต้นฉบับ + 2000px + 500px ลง CDN แล้ว index ใบหน้า
+    const fullJpeg = await cacheAllSizesSafe(driveFile.id!, imageBuffer)
+    const jpeg = await toJpegBuffer(fullJpeg, 0, AWS_MAX_BYTES)
     const faceResults = await addFaceToList(jpeg, driveFile.id!)
     const thumbnailUrl = getDriveThumbnailUrl(driveFile.id!, 400)
 

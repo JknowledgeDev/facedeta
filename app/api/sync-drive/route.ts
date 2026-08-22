@@ -3,7 +3,7 @@ import { addFaceToList } from '@/lib/azure-face'
 import { saveFaceMapping, savePhotoIndex, isPhotoProcessed } from '@/lib/supabase'
 import { downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
 import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
-import { uploadThumbSafe } from '@/lib/thumbs'
+import { cacheAllSizesSafe } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -77,9 +77,10 @@ export async function POST(req: NextRequest) {
               }
 
               const buffer = await downloadFileAsBuffer(file.id)
-              // แปลง HEIC/RAW → JPEG ครั้งเดียว ใช้ทั้ง thumbnail cache และ Rekognition
-              const jpeg = await toJpegBuffer(buffer, 0, AWS_MAX_BYTES)
-              await uploadThumbSafe(file.id, jpeg)   // cache ลง CDN → gallery/ค้นหาโหลดเร็ว
+              // เก็บสำเนา "ต้นฉบับเต็ม + 2000px + 500px" ลง CDN — ที่เก็บรูปจริงของระบบ
+              // (Drive ลบทิ้งได้หลัง sync) แล้วได้ JPEG เต็มความละเอียดกลับมาใช้ index ต่อ
+              const fullJpeg = await cacheAllSizesSafe(file.id, buffer)
+              const jpeg = await toJpegBuffer(fullJpeg, 0, AWS_MAX_BYTES)
               const faceResults = await addFaceToList(jpeg, file.id)
               const viewUrl = getDriveViewUrl(file.id)
 
