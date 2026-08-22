@@ -40,6 +40,8 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 export default function ResultCard({ result }: ResultCardProps) {
   const [showWhy, setShowWhy] = useState(false)
+  // ไฟล์ถูกลบ/ย้าย/ยกเลิกแชร์ใน Drive → แสดงรูปไม่ได้
+  const [missing, setMissing] = useState(false)
   const fullSrc = `/api/image/${result.drive_file_id}?w=1600`
   const dlName = result.file_name ?? `photo_${result.drive_file_id.slice(0, 8)}`
   const downloadSrc = `/api/image/${result.drive_file_id}?download=1&name=${encodeURIComponent(dlName)}`
@@ -55,20 +57,35 @@ export default function ResultCard({ result }: ResultCardProps) {
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-lg transition-all duration-200 hover:-translate-y-0.5 group animate-slideUp">
 
       {/* Image */}
-      <a href={fullSrc} target="_blank" rel="noopener noreferrer">
-        <div className="relative aspect-square bg-gray-100 overflow-hidden">
-          <SmartImg
-            fileId={result.drive_file_id}
-            width={600}
-            alt={result.file_name ?? 'Photo'}
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-            loading="lazy"
-          />
+      {missing ? (
+        <div className="relative aspect-square bg-gray-50 flex flex-col items-center justify-center text-center px-4 gap-2">
+          <svg className="w-10 h-10 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M3 3l18 18M10.5 8.25H19.5A2.25 2.25 0 0121.75 10.5v7.5M3.75 7.5A2.25 2.25 0 016 5.25h1.5M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159" />
+          </svg>
+          <p className="text-xs font-medium text-gray-500">ไม่สามารถแสดงรูปนี้ได้</p>
+          <p className="text-[11px] text-gray-400 leading-snug">ไฟล์ถูกลบหรือย้ายออกจาก Google Drive แล้ว</p>
           <div className="absolute top-2 left-2 right-2 flex justify-end">
             <ConfidenceBadge value={result.confidence} />
           </div>
         </div>
-      </a>
+      ) : (
+        <a href={fullSrc} target="_blank" rel="noopener noreferrer">
+          <div className="relative aspect-square bg-gray-100 overflow-hidden">
+            <SmartImg
+              fileId={result.drive_file_id}
+              width={600}
+              alt={result.file_name ?? 'Photo'}
+              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+              loading="lazy"
+              onAllFailed={() => setMissing(true)}
+            />
+            <div className="absolute top-2 left-2 right-2 flex justify-end">
+              <ConfidenceBadge value={result.confidence} />
+            </div>
+          </div>
+        </a>
+      )}
 
       {/* Info */}
       <div className="p-3 space-y-2">
@@ -166,7 +183,8 @@ export default function ResultCard({ result }: ResultCardProps) {
           </div>
         )}
 
-        {/* ปุ่มดาวน์โหลด */}
+        {/* ปุ่มดาวน์โหลด (ซ่อนถ้าไฟล์หาย) */}
+        {!missing && (
         <a
           href={downloadSrc}
           download={dlName}
@@ -179,6 +197,7 @@ export default function ResultCard({ result }: ResultCardProps) {
           </svg>
           ดาวน์โหลด
         </a>
+        )}
       </div>
     </div>
   )
