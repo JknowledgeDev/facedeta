@@ -38,7 +38,7 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
 async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<GalleryPhoto[] | null> {
   const supabase = getSupabaseAdmin()
   const SIZE = 1000
-  const PARALLEL = 40
+  const PARALLEL = 12
   // สำคัญ: paginate ด้วย .range() ต้องมี .order() ด้วย unique key เสมอ
   // ไม่งั้น Postgres ไม่รับประกันลำดับ → แถวสลับหน้า → บางรูป "หาย" จากผลลัพธ์
   const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
@@ -57,7 +57,6 @@ async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<Gal
     file_name: string | null
     event_name: string | null
     event_date: string | null
-    uploaded_at: string | null
   }
   const pages = Math.ceil(total / SIZE)
   const rows: Row[] = []
@@ -67,7 +66,7 @@ async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<Gal
       batch.map((pg) =>
         supabase
           .from(table)
-          .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
+          .select('drive_file_id, file_name, event_name, event_date')
           .order(orderCol, { ascending: true })
           .range(pg * SIZE, pg * SIZE + SIZE - 1)
       )
@@ -90,7 +89,7 @@ async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<Gal
       name: r.file_name ?? '',
       eventName: r.event_name ?? null,
       date: r.event_date ? r.event_date.slice(0, 10) : '',
-      uploadedAt: r.uploaded_at ?? '',
+      uploadedAt: '',
     })
   }
   return Array.from(byId.values())

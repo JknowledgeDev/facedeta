@@ -30,9 +30,9 @@ export async function GET() {
       { v: 2, events, photos: compact, total: photos.length },
       {
         headers: {
-          // Vercel edge cache 2 นาที + เสิร์ฟของเก่าระหว่าง refresh 10 นาที
-          // → ผู้ใช้ส่วนใหญ่ได้รายการทันที, รูปใหม่โผล่ภายใน ~2 นาที
-          'Cache-Control': 'public, max-age=0, s-maxage=120, stale-while-revalidate=600',
+          // Vercel edge cache 3 นาที + เสิร์ฟของเก่าระหว่าง refresh 30 นาที
+          // → ผู้ใช้ส่วนใหญ่ได้รายการทันที, รูปใหม่โผล่ภายใน ~3 นาที
+          'Cache-Control': 'public, max-age=0, s-maxage=180, stale-while-revalidate=1800',
         },
       }
     )
