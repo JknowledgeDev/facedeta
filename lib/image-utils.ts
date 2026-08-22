@@ -111,17 +111,17 @@ export async function toJpegBuffer(
 
   // Step 2: ใหญ่เกิน → resize แล้วลด quality จนพอ
   const dimension = maxSize > 0 ? maxSize : 1920
-  let quality = 80
+  let q = 80
   let result = full
 
-  while (quality >= 40) {
+  while (q >= 40) {
     result = await sharp(buf)
       .rotate()
       .resize(dimension, dimension, { fit: 'inside', withoutEnlargement: true })
-      .jpeg({ quality })
+      .jpeg({ quality: q })
       .toBuffer()
     if (result.length <= maxBytes) return result
-    quality -= 10
+    q -= 10
   }
 
   // Step 3: fallback สุดท้าย → บีบให้เล็กลงอีก
