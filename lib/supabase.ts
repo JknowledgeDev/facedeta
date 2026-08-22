@@ -38,7 +38,7 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
 async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<GalleryPhoto[] | null> {
   const supabase = getSupabaseAdmin()
   const SIZE = 1000
-  const PARALLEL = 12
+  const PARALLEL = 40
   // สำคัญ: paginate ด้วย .range() ต้องมี .order() ด้วย unique key เสมอ
   // ไม่งั้น Postgres ไม่รับประกันลำดับ → แถวสลับหน้า → บางรูป "หาย" จากผลลัพธ์
   const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
