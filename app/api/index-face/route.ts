@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { addFaceToList, trainFaceList } from '@/lib/azure-face'
-import { saveFaceMapping, isFileIndexed } from '@/lib/supabase'
+import { saveFaceMapping, savePhotoIndex, isPhotoProcessed } from '@/lib/supabase'
 import { uploadFileToDrive, getDriveThumbnailUrl } from '@/lib/drive'
+import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
+import { uploadThumbSafe } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -26,20 +28,33 @@ export async function POST(req: NextRequest) {
     // 1. Upload ไปยัง Google Drive
     const driveFile = await uploadFileToDrive(imageBuffer, file.name, file.type)
 
-    // 2. ตรวจว่า index แล้วหรือยัง
-    if (await isFileIndexed(driveFile.id!)) {
+    // 2. ตรวจว่าประมวลผลแล้วหรือยัง
+    if (await isPhotoProcessed(driveFile.id!)) {
       return NextResponse.json({ message: 'File already indexed', fileId: driveFile.id, facesIndexed: 0 })
     }
 
-    // 3. เพิ่มใบหน้าเข้า Azure LargeFaceList
-    const faceResults = await addFaceToList(imageBuffer, driveFile.id!)
+    // 3. แปลงครั้งเดียว → cache thumbnail ลง CDN + index ใบหน้า
+    const jpeg = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
+    await uploadThumbSafe(driveFile.id!, jpeg)
+    const faceResults = await addFaceToList(jpeg, driveFile.id!)
+    const thumbnailUrl = getDriveThumbnailUrl(driveFile.id!, 400)
+
+    // เก็บ "ทุกรูป" ลง photo_index เสมอ แม้ไม่พบใบหน้า
+    await savePhotoIndex({
+      driveFileId: driveFile.id!,
+      fileName: file.name,
+      eventName: eventName || undefined,
+      eventDate: eventDate || undefined,
+      thumbnailUrl,
+      hasFace: faceResults.length > 0,
+      faceCount: faceResults.length,
+    })
 
     if (faceResults.length === 0) {
       return NextResponse.json({ message: 'No face detected in image', fileId: driveFile.id, facesIndexed: 0 })
     }
 
     // 4. บันทึก mapping ใน Supabase
-    const thumbnailUrl = getDriveThumbnailUrl(driveFile.id!, 400)
     await Promise.all(
       faceResults.map((f) =>
         saveFaceMapping({

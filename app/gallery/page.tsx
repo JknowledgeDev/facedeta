@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { apiUrl } from '@/lib/api-url'
 import PhotoCalendar from '@/components/PhotoCalendar'
+import SmartImg from '@/components/SmartImg'
 
 interface PhotoMeta {
   id: string
@@ -27,7 +28,6 @@ function formatThaiDate(date: string): string {
 }
 
 // ใช้ proxy ของแอป (OAuth) — ดู/ดาวน์โหลดได้ทุกคนโดยไม่ต้องตั้ง Drive เป็น public
-const thumbUrl = (id: string) => `/api/image/${id}?w=500`
 const fullUrl = (id: string) => `/api/image/${id}?w=1600`
 const downloadUrl = (id: string, name: string) => `/api/image/${id}?download=1&name=${encodeURIComponent(name)}`
 
@@ -306,11 +306,10 @@ export default function GalleryPage() {
               className="group relative rounded-xl overflow-hidden cursor-pointer aspect-square
                 shadow-sm hover:shadow-lg transition-shadow duration-200 bg-gray-100"
               onClick={() => openLightbox(idx)}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={thumbUrl(photo.id)} alt={photo.name}
+              <SmartImg fileId={photo.id} width={500} alt={photo.name}
                 className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                 loading="lazy"
-                onError={() => setBroken((prev) => {
+                onAllFailed={() => setBroken((prev) => {
                   if (prev.has(photo.id)) return prev
                   const n = new Set(prev); n.add(photo.id); return n
                 })} />
@@ -364,7 +363,7 @@ export default function GalleryPage() {
 
           <div className="relative max-w-[90vw] max-h-[90vh] flex items-center justify-center">
             {!imgLoaded && (
-              <img src={thumbUrl(lightbox.id)} alt="" aria-hidden
+              <SmartImg fileId={lightbox.id} width={500} alt="" aria-hidden
                 className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg blur-sm scale-105" />
             )}
             {/* eslint-disable-next-line @next/next/no-img-element */}

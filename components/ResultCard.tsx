@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { type SearchResult } from '@/lib/supabase'
+import SmartImg from '@/components/SmartImg'
 
 interface ResultCardProps {
   result: SearchResult
@@ -39,7 +40,6 @@ function ConfidenceBadge({ value }: { value: number }) {
 
 export default function ResultCard({ result }: ResultCardProps) {
   const [showWhy, setShowWhy] = useState(false)
-  const imgSrc = `/api/image/${result.drive_file_id}?w=600`
   const fullSrc = `/api/image/${result.drive_file_id}?w=1600`
   const dlName = result.file_name ?? `photo_${result.drive_file_id.slice(0, 8)}`
   const downloadSrc = `/api/image/${result.drive_file_id}?download=1&name=${encodeURIComponent(dlName)}`
@@ -57,8 +57,9 @@ export default function ResultCard({ result }: ResultCardProps) {
       {/* Image */}
       <a href={fullSrc} target="_blank" rel="noopener noreferrer">
         <div className="relative aspect-square bg-gray-100 overflow-hidden">
-          <img
-            src={imgSrc}
+          <SmartImg
+            fileId={result.drive_file_id}
+            width={600}
             alt={result.file_name ?? 'Photo'}
             className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
             loading="lazy"

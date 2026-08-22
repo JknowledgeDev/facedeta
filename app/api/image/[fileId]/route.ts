@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { downloadFileAsBuffer, getThumbnailBuffer } from '@/lib/drive'
 import { toJpegBuffer } from '@/lib/image-utils'
+import { uploadThumbInBackground, THUMB_SIZE } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 
@@ -26,8 +27,8 @@ export async function GET(
   try {
     const headers: Record<string, string> = {
       'Content-Type': 'image/jpeg',
-      // cache ใน browser/CDN 1 วัน (รูปไม่เปลี่ยน)
-      'Cache-Control': 'public, max-age=86400, stale-while-revalidate=604800',
+      // browser 1 วัน + Vercel edge cache 1 ปี (รูปไม่เปลี่ยน) → ครั้งต่อไปไม่ต้องเรียก Drive
+      'Cache-Control': 'public, max-age=86400, s-maxage=31536000, stale-while-revalidate=604800',
     }
 
     // ── แสดงผล (ไม่ใช่ดาวน์โหลด): ใช้ thumbnailLink จาก Google CDN — เร็วมาก
@@ -35,6 +36,8 @@ export async function GET(
     if (!isDownload) {
       const thumb = await getThumbnailBuffer(fileId, width)
       if (thumb) {
+        // เก็บลง CDN cache (Supabase Storage) ให้ครั้งต่อไปโหลดตรงไม่ผ่าน proxy
+        if (width <= THUMB_SIZE + 100) uploadThumbInBackground(fileId, thumb)
         return new NextResponse(thumb as unknown as BodyInit, { status: 200, headers })
       }
     }
@@ -42,6 +45,7 @@ export async function GET(
     // ── ดาวน์โหลด หรือไม่มี thumbnail: ดาวน์โหลดไฟล์เต็ม + แปลง JPEG (คุณภาพสูง)
     const raw = await downloadFileAsBuffer(fileId)
     const jpeg = await toJpegBuffer(raw, width)
+    if (!isDownload && width <= THUMB_SIZE + 100) uploadThumbInBackground(fileId, jpeg)
     if (isDownload) {
       headers['Content-Disposition'] = `attachment; filename="${downloadName}"`
     }

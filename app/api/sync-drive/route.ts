@@ -1,7 +1,9 @@
 import { NextRequest } from 'next/server'
 import { addFaceToList } from '@/lib/azure-face'
-import { saveFaceMapping, isFileIndexed } from '@/lib/supabase'
+import { saveFaceMapping, savePhotoIndex, isPhotoProcessed } from '@/lib/supabase'
 import { downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
+import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
+import { uploadThumbSafe } from '@/lib/thumbs'
 
 export const runtime = 'nodejs'
 export const maxDuration = 300
@@ -58,8 +60,8 @@ export async function POST(req: NextRequest) {
 
       try {
         for (const file of files) {
-          // ข้ามรูปที่ index แล้ว
-          if (await isFileIndexed(file.id)) {
+          // ข้ามรูปที่ประมวลผลแล้ว (ทั้งรูปที่มีหน้าและไม่มีหน้า)
+          if (await isPhotoProcessed(file.id)) {
             countSkipped++
             totalProcessed++
             send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'skipped', ...stats() })
@@ -75,7 +77,22 @@ export async function POST(req: NextRequest) {
               }
 
               const buffer = await downloadFileAsBuffer(file.id)
-              const faceResults = await addFaceToList(buffer, file.id)
+              // แปลง HEIC/RAW → JPEG ครั้งเดียว ใช้ทั้ง thumbnail cache และ Rekognition
+              const jpeg = await toJpegBuffer(buffer, 0, AWS_MAX_BYTES)
+              await uploadThumbSafe(file.id, jpeg)   // cache ลง CDN → gallery/ค้นหาโหลดเร็ว
+              const faceResults = await addFaceToList(jpeg, file.id)
+              const viewUrl = getDriveViewUrl(file.id)
+
+              // เก็บ "ทุกรูป" ลง photo_index เสมอ แม้ไม่พบใบหน้า
+              await savePhotoIndex({
+                driveFileId: file.id,
+                fileName: file.name,
+                eventName: eventName || undefined,
+                eventDate: eventDate || undefined,
+                thumbnailUrl: viewUrl,
+                hasFace: faceResults.length > 0,
+                faceCount: faceResults.length,
+              })
 
               if (faceResults.length === 0) {
                 countNoFace++
@@ -84,7 +101,6 @@ export async function POST(req: NextRequest) {
                 break
               }
 
-              const viewUrl = getDriveViewUrl(file.id)
               await Promise.all(
                 faceResults.map((f) =>
                   saveFaceMapping({
