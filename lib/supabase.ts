@@ -37,48 +37,62 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
  */
 async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<GalleryPhoto[] | null> {
   const supabase = getSupabaseAdmin()
-  const byId = new Map<string, GalleryPhoto>()
   const SIZE = 1000
-  let from = 0
+  const PARALLEL = 12
   // สำคัญ: paginate ด้วย .range() ต้องมี .order() ด้วย unique key เสมอ
   // ไม่งั้น Postgres ไม่รับประกันลำดับ → แถวสลับหน้า → บางรูป "หาย" จากผลลัพธ์
   const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
 
-  while (true) {
-    const { data, error } = await supabase
-      .from(table)
-      .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
-      .order(orderCol, { ascending: true })
-      .range(from, from + SIZE - 1)
+  // 1) นับแถวทั้งหมดก่อน (ตรวจว่าตารางมีอยู่ไปในตัว)
+  const { count, error: cErr } = await supabase
+    .from(table)
+    .select('drive_file_id', { count: 'exact', head: true })
+  if (cErr) return isMissingTable(cErr) ? null : []
+  const total = count ?? 0
+  if (total === 0) return []
 
-    if (error) {
-      if (isMissingTable(error)) return null
-      break
-    }
-    if (!data || data.length === 0) break
-
-    for (const row of data) {
-      const r = row as {
-        drive_file_id: string | null
-        file_name: string | null
-        event_name: string | null
-        event_date: string | null
-        uploaded_at: string | null
+  // 2) ดึงทุกหน้าแบบขนาน (ทีละ PARALLEL หน้า) — เร็วกว่าต่อกันทีละหน้าหลายเท่า
+  type Row = {
+    drive_file_id: string | null
+    file_name: string | null
+    event_name: string | null
+    event_date: string | null
+    uploaded_at: string | null
+  }
+  const pages = Math.ceil(total / SIZE)
+  const rows: Row[] = []
+  for (let p = 0; p < pages; p += PARALLEL) {
+    const batch = Array.from({ length: Math.min(PARALLEL, pages - p) }, (_, i) => p + i)
+    const results = await Promise.all(
+      batch.map((pg) =>
+        supabase
+          .from(table)
+          .select('drive_file_id, file_name, event_name, event_date, uploaded_at')
+          .order(orderCol, { ascending: true })
+          .range(pg * SIZE, pg * SIZE + SIZE - 1)
+      )
+    )
+    for (const r of results) {
+      if (r.error) {
+        if (isMissingTable(r.error)) return null
+        continue
       }
-      if (!r.drive_file_id || byId.has(r.drive_file_id)) continue
-      byId.set(r.drive_file_id, {
-        id: r.drive_file_id,
-        name: r.file_name ?? '',
-        eventName: r.event_name ?? null,
-        date: r.event_date ? r.event_date.slice(0, 10) : '',
-        uploadedAt: r.uploaded_at ?? '',
-      })
+      rows.push(...((r.data ?? []) as Row[]))
     }
-
-    if (data.length < SIZE) break
-    from += SIZE
   }
 
+  // 3) dedupe ตาม drive_file_id (face_index มีหลายแถวต่อรูป)
+  const byId = new Map<string, GalleryPhoto>()
+  for (const r of rows) {
+    if (!r.drive_file_id || byId.has(r.drive_file_id)) continue
+    byId.set(r.drive_file_id, {
+      id: r.drive_file_id,
+      name: r.file_name ?? '',
+      eventName: r.event_name ?? null,
+      date: r.event_date ? r.event_date.slice(0, 10) : '',
+      uploadedAt: r.uploaded_at ?? '',
+    })
+  }
   return Array.from(byId.values())
 }
 

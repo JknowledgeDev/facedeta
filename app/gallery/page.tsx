@@ -32,6 +32,19 @@ const fullUrl = (id: string) => `/api/image/${id}?w=1600`
 const downloadUrl = (id: string, name: string) => `/api/image/${id}?download=1&name=${encodeURIComponent(name)}`
 
 const PAGE = 60 // จำนวนรูปต่อการแสดงผลหนึ่งช่วง
+const CACHE_KEY = 'fd_manifest_v2'
+
+/** แปลง manifest (v2 แบบย่อ หรือ v1) → PhotoMeta[] */
+function decodeManifest(data: unknown): PhotoMeta[] {
+  const d = data as { v?: number; events?: string[]; photos?: unknown[] }
+  if (d?.v === 2) {
+    const ev = d.events ?? []
+    return ((d.photos ?? []) as [string, string, number, string][]).map(([id, name, e, date]) => ({
+      id, name, eventName: e >= 0 ? (ev[e] ?? null) : null, date: date ?? '', uploadedAt: '',
+    }))
+  }
+  return ((d?.photos ?? []) as PhotoMeta[])
+}
 
 type Filter =
   | { kind: 'all' }
@@ -55,20 +68,33 @@ export default function GalleryPage() {
   const sentinelRef = useRef<HTMLDivElement>(null)
 
   // ─── โหลด manifest (รูปทั้งหมดจากทุกโฟลเดอร์ที่เคย sync) ──────────
+  // stale-while-revalidate: แสดงรายการที่จำไว้ในเครื่องทันที แล้วดึงของใหม่มาแทนเบื้องหลัง
   useEffect(() => {
-    (async () => {
-      setLoading(true)
+    let hadCache = false
+    try {
+      const raw = localStorage.getItem(CACHE_KEY)
+      if (raw) {
+        const cached = JSON.parse(raw)
+        const list = decodeManifest(cached.data)
+        if (list.length > 0) { setManifest(list); setLoading(false); hadCache = true }
+      }
+    } catch { /* ignore */ }
+
+    const load = async () => {
+      if (!hadCache) setLoading(true)
       try {
         const res = await fetch(apiUrl('/api/photo-manifest'))
         if (!res.ok) throw new Error('โหลดรูปไม่สำเร็จ')
         const data = await res.json()
-        setManifest(data.photos ?? [])
+        setManifest(decodeManifest(data))
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })) } catch { /* quota */ }
       } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
+        if (!hadCache) setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
       } finally {
         setLoading(false)
       }
-    })()
+    }
+    load()
   }, [])
 
   // นับรูปต่อวัน (จากวันกิจกรรม)
