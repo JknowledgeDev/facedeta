@@ -159,6 +159,28 @@ export async function saveFaceMapping(data: {
   if (error) throw new Error(`Supabase saveFaceMapping: ${error.message}`)
 }
 
+/**
+ * บันทึกรูปที่ "ไม่พบใบหน้า" (ภาพบรรยากาศ) ลง face_index ด้วย face_id สังเคราะห์
+ * `noface-<driveFileId>` → รูปโผล่ใน gallery/ปฏิทิน/กิจกรรม แต่ไม่มีทางชนกับ
+ * ผลค้นหา (Rekognition คืนแต่ faceId จริง) — ใช้แทน photo_index จนกว่าตารางจะถูกสร้าง
+ */
+export async function saveNoFacePlaceholder(data: {
+  driveFileId: string
+  fileName?: string
+  eventName?: string
+  eventDate?: string
+  thumbnailUrl?: string
+}): Promise<void> {
+  await saveFaceMapping({
+    faceId: `noface-${data.driveFileId}`,
+    driveFileId: data.driveFileId,
+    fileName: data.fileName,
+    eventName: data.eventName,
+    eventDate: data.eventDate,
+    thumbnailUrl: data.thumbnailUrl,
+  })
+}
+
 // บันทึก "1 รูป" ลง photo_index (เก็บทุกรูป แม้ไม่มีใบหน้า)
 // เรียกทั้งกรณี index สำเร็จ (hasFace=true) และไม่พบใบหน้า (hasFace=false)
 export async function savePhotoIndex(data: {
@@ -261,6 +283,10 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
     .select('face_id')
 
   if (error) throw new Error(`Supabase deleteFaceMappings: ${error.message}`)
+  // ตัด placeholder ออก — ไม่ใช่ faceId จริงใน Rekognition (ห้ามส่งไป DeleteFaces)
+  const realFaceIds = (data ?? [])
+    .map((r: { face_id: string }) => r.face_id)
+    .filter((id: string) => !id.startsWith('noface-'))
 
   // ลบออกจาก photo_index ด้วย เพื่อให้แกลเลอรี/สถิติไม่ค้าง
   const { error: pErr } = await supabase
@@ -269,7 +295,7 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
     .eq('drive_file_id', driveFileId)
   if (pErr && !isMissingTable(pErr)) throw new Error(`Supabase deletePhotoIndex: ${pErr.message}`)
 
-  return (data ?? []).map((r: { face_id: string }) => r.face_id)
+  return realFaceIds
 }
 
 /**

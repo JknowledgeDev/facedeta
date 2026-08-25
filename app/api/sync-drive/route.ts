@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { addFaceToList } from '@/lib/azure-face'
-import { saveFaceMapping, savePhotoIndex, isPhotoProcessed } from '@/lib/supabase'
+import { saveFaceMapping, savePhotoIndex, saveNoFacePlaceholder, isPhotoProcessed } from '@/lib/supabase'
 import { downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
 import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
 import { cacheAllSizesSafe } from '@/lib/thumbs'
@@ -96,6 +96,14 @@ export async function POST(req: NextRequest) {
               })
 
               if (faceResults.length === 0) {
+                // ไม่พบใบหน้า → ลงเป็น "ภาพบรรยากาศ" ให้โผล่ใน gallery ด้วย
+                await saveNoFacePlaceholder({
+                  driveFileId: file.id,
+                  fileName: file.name,
+                  eventName: eventName || undefined,
+                  eventDate: eventDate || undefined,
+                  thumbnailUrl: viewUrl,
+                })
                 countNoFace++
                 totalProcessed++
                 send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'no_face', ...stats() })
