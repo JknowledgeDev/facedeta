@@ -15,6 +15,14 @@ export interface SearchResult extends FaceIndexRow {
   confidence: number   // % ความคล้ายของใบหน้า (0–100)
   faceArea: number     // พื้นที่ใบหน้าในรูปต้นฉบับ (0–1)
   view_url: string
+  /** 'sure' = มั่นใจ ≥ threshold, 'maybe' = โปรดตรวจสอบ (พับเก็บ) */
+  band?: 'sure' | 'maybe'
+  /** ผ่านการยืนยันซ้ำด้วย CompareFaces แล้ว */
+  verified?: boolean
+  /** จำนวนรูปต้นแบบที่เจอใบหน้านี้ (multi-probe vote) */
+  probeHits?: number
+  /** ตำแหน่งใบหน้าที่ match ในรูป (สัดส่วน 0–1) */
+  bbox?: { left: number; top: number; width: number; height: number }
 }
 
 export interface GalleryPhoto {

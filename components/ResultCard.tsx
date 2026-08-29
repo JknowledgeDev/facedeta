@@ -3,9 +3,12 @@
 import { useState } from 'react'
 import { type SearchResult } from '@/lib/supabase'
 import SmartImg from '@/components/SmartImg'
+import { displayCdnUrl } from '@/lib/thumb-url'
 
 interface ResultCardProps {
   result: SearchResult
+  /** ผู้ปกครองยืนยันว่าไม่ใช่คนที่ค้นหา → ซ่อน + เก็บ feedback */
+  onNotMatch?: () => void
 }
 
 /** แปลง faceArea (0–1) เป็นข้อความอธิบาย */
@@ -17,28 +20,50 @@ function faceAreaLabel(area: number): string {
   return 'ใบหน้าขนาดเล็กมาก'
 }
 
-/** แปลง confidence เป็นขั้น */
+/** แปลง confidence เป็นขั้น (เกณฑ์ใหม่: 97/90) */
 function confidenceLevel(pct: number): { label: string; color: string; bg: string; border: string; barColor: string } {
-  if (pct >= 90) return { label: 'ตรงมาก', color: 'text-green-700', bg: 'bg-green-50', border: 'border-green-200', barColor: 'bg-green-500' }
-  if (pct >= 75) return { label: 'น่าจะใช่', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200', barColor: 'bg-blue-500' }
-  return { label: 'อาจจะใช่', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', barColor: 'bg-amber-500' }
+  if (pct >= 97) return { label: 'ตรงมาก', color: 'text-green-700', bg: 'bg-green-50', border: 'border-green-200', barColor: 'bg-green-500' }
+  if (pct >= 90) return { label: 'น่าจะใช่', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200', barColor: 'bg-blue-500' }
+  return { label: 'โปรดตรวจสอบ', color: 'text-amber-700', bg: 'bg-amber-50', border: 'border-amber-200', barColor: 'bg-amber-500' }
 }
 
 /** Badge บนรูป */
-function ConfidenceBadge({ value }: { value: number }) {
+function ConfidenceBadge({ value, verified }: { value: number; verified?: boolean }) {
   const lv = confidenceLevel(value)
   return (
     <span className={`text-xs font-bold px-2 py-1 rounded-full shadow-sm ${
-      value >= 90 ? 'bg-green-500 text-white' :
-      value >= 75 ? 'bg-blue-500 text-white' :
+      value >= 97 ? 'bg-green-500 text-white' :
+      value >= 90 ? 'bg-blue-500 text-white' :
       'bg-amber-500 text-white'
     }`}>
-      {value >= 90 ? '✓' : value >= 75 ? '~' : '?'} {lv.label} {value}%
+      {verified ? '✓✓' : value >= 97 ? '✓' : value >= 90 ? '~' : '?'} {lv.label} {value}%
     </span>
   )
 }
 
-export default function ResultCard({ result }: ResultCardProps) {
+/** crop ใบหน้าที่ match — ให้ผู้ปกครองรู้ว่า match ใครในรูปหมู่ */
+function FaceCrop({ fileId, bbox }: { fileId: string; bbox: NonNullable<SearchResult['bbox']> }) {
+  if (bbox.width <= 0 || bbox.height <= 0) return null
+  // ขยาย bbox เล็กน้อยให้เห็นทั้งหน้า
+  const pad = 0.35
+  const w = Math.min(bbox.width * (1 + pad * 2), 1)
+  const h = Math.min(bbox.height * (1 + pad * 2), 1)
+  const l = Math.max(Math.min(bbox.left - bbox.width * pad, 1 - w), 0)
+  const t = Math.max(Math.min(bbox.top - bbox.height * pad, 1 - h), 0)
+  return (
+    <span
+      className="w-10 h-10 rounded-full border-2 border-white shadow-md bg-gray-200 bg-no-repeat shrink-0"
+      title="ใบหน้าที่ระบบจับคู่ได้"
+      style={{
+        backgroundImage: `url(${displayCdnUrl(fileId)})`,
+        backgroundSize: `${100 / w}% ${100 / h}%`,
+        backgroundPosition: `${(l / (1 - w || 1)) * 100}% ${(t / (1 - h || 1)) * 100}%`,
+      }}
+    />
+  )
+}
+
+export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
   const [showWhy, setShowWhy] = useState(false)
   // ไฟล์ถูกลบ/ย้าย/ยกเลิกแชร์ใน Drive → แสดงรูปไม่ได้
   const [missing, setMissing] = useState(false)
@@ -66,7 +91,7 @@ export default function ResultCard({ result }: ResultCardProps) {
           <p className="text-xs font-medium text-gray-500">ไม่สามารถแสดงรูปนี้ได้</p>
           <p className="text-[11px] text-gray-400 leading-snug">ไฟล์ถูกลบหรือย้ายออกจาก Google Drive แล้ว</p>
           <div className="absolute top-2 left-2 right-2 flex justify-end">
-            <ConfidenceBadge value={result.confidence} />
+            <ConfidenceBadge value={result.confidence} verified={result.verified} />
           </div>
         </div>
       ) : (
@@ -80,8 +105,9 @@ export default function ResultCard({ result }: ResultCardProps) {
               loading="lazy"
               onAllFailed={() => setMissing(true)}
             />
-            <div className="absolute top-2 left-2 right-2 flex justify-end">
-              <ConfidenceBadge value={result.confidence} />
+            <div className="absolute top-2 left-2 right-2 flex justify-between items-start">
+              {result.bbox ? <FaceCrop fileId={result.drive_file_id} bbox={result.bbox} /> : <span />}
+              <ConfidenceBadge value={result.confidence} verified={result.verified} />
             </div>
           </div>
         </a>
@@ -197,6 +223,16 @@ export default function ResultCard({ result }: ResultCardProps) {
           </svg>
           ดาวน์โหลด
         </a>
+        )}
+
+        {/* feedback: ไม่ใช่คนที่ค้นหา → ซ่อน + เก็บข้อมูลปรับปรุงระบบ */}
+        {onNotMatch && !missing && (
+          <button
+            onClick={onNotMatch}
+            className="w-full text-center text-[11px] text-gray-300 hover:text-red-400 transition-colors py-0.5"
+          >
+            ✕ ไม่ใช่คนนี้
+          </button>
         )}
       </div>
     </div>

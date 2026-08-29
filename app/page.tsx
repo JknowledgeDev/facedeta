@@ -14,9 +14,14 @@ type Status = 'idle' | 'searching' | 'done'
 
 export default function SearchPage() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [threshold, setThreshold] = useState(75)
+  // รูปเพิ่มเติม (ไม่บังคับ) — หลายรูปช่วยเพิ่มความแม่นยำมาก (แนวทาง AWS)
+  const [extraFiles, setExtraFiles] = useState<(File | null)[]>([null, null])
+  const [threshold, setThreshold] = useState(95)
   const [status, setStatus] = useState<Status>('idle')
   const [results, setResults] = useState<SearchResult[]>([])
+  const [probeWarnings, setProbeWarnings] = useState<string[]>([])
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set())
+  const [showMaybe, setShowMaybe] = useState(false)
 
   const handleSearch = async () => {
     if (!selectedFile) {
@@ -26,12 +31,19 @@ export default function SearchPage() {
 
     setStatus('searching')
     setResults([])
+    setProbeWarnings([])
+    setHiddenIds(new Set())
+    setShowMaybe(false)
 
     try {
-      const compressed = await compressIfNeeded(selectedFile)
-
+      // บีบรูปต้นแบบให้เล็ก (1600px พอสำหรับจับใบหน้า) — ส่งได้สูงสุด 3 รูปใน request เดียว
+      const probeOpts = { maxDim: 1600, maxBytes: 1_300_000 }
+      const allFiles = [selectedFile, ...extraFiles.filter((f): f is File => f !== null)]
       const form = new FormData()
-      form.append('image', compressed, selectedFile.name)
+      for (let i = 0; i < allFiles.length; i++) {
+        const compressed = await compressIfNeeded(allFiles[i], probeOpts)
+        form.append(`image${i}`, compressed, allFiles[i].name)
+      }
       form.append('threshold', String(threshold))
 
       const res = await fetch(apiUrl('/api/search'), { method: 'POST', body: form })
@@ -51,17 +63,43 @@ export default function SearchPage() {
       if (!res.ok) throw new Error((data.error as string) ?? 'Search failed')
 
       setResults(data.results as SearchResult[])
+      setProbeWarnings((data.probeWarnings as string[]) ?? [])
       setStatus('done')
 
-      if (data.total === 0) {
-        toast('ไม่พบรูปภาพที่ตรงกัน ลองเปลี่ยนระดับการค้นหาดู', { icon: '🔍' })
+      const total = (data.total as number) ?? 0
+      const totalMaybe = (data.totalMaybe as number) ?? 0
+      if (total === 0 && totalMaybe === 0) {
+        toast('ไม่พบรูปภาพที่ตรงกัน ลองเพิ่มรูปต้นแบบหรือเปลี่ยนระดับการค้นหา', { icon: '🔍' })
+      } else if (total === 0 && totalMaybe > 0) {
+        toast(`พบ ${totalMaybe} รูปที่อาจจะใช่ — โปรดตรวจสอบ`, { icon: '🟡' })
+        setShowMaybe(true)
       } else {
-        toast.success(`พบ ${data.total as number} รูปภาพ`)
+        toast.success(`พบ ${total} รูปภาพ`)
       }
     } catch (err: unknown) {
       setStatus('idle')
       toast.error(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
     }
+  }
+
+  const sureResults = results.filter((r) => r.band !== 'maybe' && !hiddenIds.has(r.id))
+  const maybeResults = results.filter((r) => r.band === 'maybe' && !hiddenIds.has(r.id))
+
+  /** ผู้ปกครองกด "ไม่ใช่คนนี้" → ซ่อนการ์ด + ส่ง feedback เก็บไว้ปรับปรุงระบบ */
+  const handleNotMatch = (r: SearchResult) => {
+    setHiddenIds((prev) => { const n = new Set(prev); n.add(r.id); return n })
+    fetch(apiUrl('/api/feedback'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        driveFileId: r.drive_file_id,
+        confidence: r.confidence,
+        threshold,
+        verified: r.verified ?? false,
+        eventName: r.event_name,
+      }),
+    }).catch(() => { /* best-effort */ })
+    toast('ขอบคุณสำหรับข้อมูล ระบบจะนำไปปรับปรุงความแม่นยำ', { icon: '🙏' })
   }
 
   return (
@@ -95,7 +133,7 @@ export default function SearchPage() {
         <h2 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-4">วิธีใช้งาน</h2>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-4">
           {[
-            { step: '1', icon: '📸', title: 'เลือกรูปต้นแบบ (รูปน้อง)', desc: 'อัพโหลดรูปถ่ายที่เห็นหน้าน้องชัดเจน' },
+            { step: '1', icon: '📸', title: 'อัพรูปน้อง 1-3 รูป', desc: 'ยิ่งหลายรูป (หน้าตรง + มุมอื่น) ยิ่งแม่นยำ' },
             { step: '2', icon: '🎚️', title: 'เลือกระดับการค้นหา', desc: 'เลือกว่าต้องการค้นหากว้างหรือแม่นยำ' },
             { step: '3', icon: '🔍', title: 'กดค้นหา', desc: 'ระบบจะค้นหาและแสดงผลทันที' },
           ].map((s) => (
@@ -137,6 +175,44 @@ export default function SearchPage() {
           sublabel="รองรับ JPG, PNG, WEBP, HEIC (รูปจาก iPhone) • ไม่เกิน 10MB"
         />
 
+        {/* รูปเพิ่มเติม (ไม่บังคับ) — multi-probe เพิ่มความแม่นยำ */}
+        <div className="rounded-xl border border-dashed border-green-200 bg-green-50/40 p-3">
+          <p className="text-xs font-medium text-gray-600 mb-2 flex items-center gap-1.5">
+            <span className="text-base">✨</span>
+            เพิ่มรูปน้องอีก 1-2 รูป <span className="text-gray-400 font-normal">(ไม่บังคับ — ช่วยให้แม่นยำขึ้นมาก)</span>
+          </p>
+          <div className="grid grid-cols-2 gap-2">
+            {extraFiles.map((f, i) => (
+              <div key={i}>
+                {f ? (
+                  <div className="relative rounded-lg overflow-hidden border border-green-200 bg-white">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={URL.createObjectURL(f)} alt="" className="w-full h-20 object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => setExtraFiles((prev) => prev.map((x, j) => (j === i ? null : x)))}
+                      className="absolute top-1 right-1 w-6 h-6 bg-black/50 hover:bg-red-500 text-white rounded-full flex items-center justify-center text-xs transition-colors"
+                    >✕</button>
+                  </div>
+                ) : (
+                  <label className="flex flex-col items-center justify-center h-20 rounded-lg border border-dashed border-gray-300 bg-white hover:border-green-400 hover:bg-green-50/50 cursor-pointer transition-colors">
+                    <span className="text-xl text-gray-300">＋</span>
+                    <span className="text-[11px] text-gray-400">รูปที่ {i + 2}</span>
+                    <input
+                      type="file" accept="image/*,.heic,.heif" className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (file) setExtraFiles((prev) => prev.map((x, j) => (j === i ? file : x)))
+                        e.target.value = ''
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
         <ThresholdSlider value={threshold} onChange={setThreshold} />
 
         <button
@@ -171,23 +247,36 @@ export default function SearchPage() {
       {/* ── Results ── */}
       {status === 'done' && (
         <div className="space-y-4 animate-slideUp">
+          {/* คำแนะนำคุณภาพรูปต้นแบบ (ไม่บล็อกการค้นหา) */}
+          {probeWarnings.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-1">
+              {probeWarnings.map((w) => (
+                <p key={w} className="text-xs text-amber-700 flex items-start gap-1.5">
+                  <span className="shrink-0">💡</span>{w}
+                </p>
+              ))}
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h2 className="font-bold text-gray-800 text-base sm:text-lg">ผลการค้นหา</h2>
-              {results.length > 0 && (
+              {sureResults.length > 0 && (
                 <span className="bg-green-600 text-white text-xs font-bold px-3 py-1 rounded-full">
-                  {results.length} รูป
+                  {sureResults.length} รูป
                 </span>
               )}
             </div>
-            {results.length > 0 && (
-              <span className="text-xs text-gray-400">เรียงตามความแม่นยำ</span>
+            {sureResults.length > 0 && (
+              <span className="text-xs text-gray-400">ยืนยันใบหน้าซ้ำแล้ว • เรียงตามความแม่นยำ</span>
             )}
           </div>
 
-          {results.length > 0 ? (
+          {sureResults.length > 0 ? (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4">
-              {results.map((r) => <ResultCard key={r.id} result={r} />)}
+              {sureResults.map((r) => (
+                <ResultCard key={r.id} result={r} onNotMatch={() => handleNotMatch(r)} />
+              ))}
             </div>
           ) : (
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm py-14 px-6 text-center">
@@ -199,7 +288,7 @@ export default function SearchPage() {
               </div>
               <h3 className="font-bold text-gray-700 text-base mb-1">ไม่พบรูปภาพที่ตรงกัน</h3>
               <p className="text-sm text-gray-500 max-w-xs mx-auto">
-                ลองเปลี่ยนเป็น &ldquo;ค้นหาทั่วไป&rdquo; หรืออัพโหลดรูปที่เห็นหน้าชัดขึ้น
+                ลองเพิ่มรูปต้นแบบอีก 1-2 รูป หรือเปลี่ยนเป็น &ldquo;ค้นหากว้าง&rdquo;
               </p>
               <button onClick={() => setStatus('idle')}
                 className="mt-4 inline-flex items-center gap-2 text-sm text-green-600 hover:text-green-700 font-medium">
@@ -208,6 +297,31 @@ export default function SearchPage() {
                 </svg>
                 ค้นหาใหม่
               </button>
+            </div>
+          )}
+
+          {/* ── "อาจจะใช่" — ความมั่นใจต่ำกว่าเกณฑ์เล็กน้อย พับเก็บให้ตรวจเอง ── */}
+          {maybeResults.length > 0 && (
+            <div className="border border-amber-200 rounded-2xl overflow-hidden">
+              <button
+                onClick={() => setShowMaybe((v) => !v)}
+                className="w-full flex items-center justify-between px-4 py-3 bg-amber-50 hover:bg-amber-100 transition-colors"
+              >
+                <span className="text-sm font-semibold text-amber-700 flex items-center gap-2">
+                  🟡 อาจจะใช่ — โปรดตรวจสอบด้วยตา ({maybeResults.length} รูป)
+                </span>
+                <svg className={`w-4 h-4 text-amber-500 transition-transform ${showMaybe ? 'rotate-180' : ''}`}
+                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {showMaybe && (
+                <div className="p-3 sm:p-4 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4 bg-white">
+                  {maybeResults.map((r) => (
+                    <ResultCard key={r.id} result={r} onNotMatch={() => handleNotMatch(r)} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

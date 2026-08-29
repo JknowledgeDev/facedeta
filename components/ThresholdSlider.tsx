@@ -5,12 +5,16 @@ interface ThresholdSliderProps {
   onChange: (value: number) => void
 }
 
+/**
+ * ระดับใหม่ตามแนวทาง AWS production (90-99):
+ * ค่าต่ำกว่านี้ทำให้เด็กหน้าคล้ายปนเข้ามา — ผลที่ไม่มั่นใจจะไปอยู่หมวด "อาจจะใช่" แทน
+ */
 const PRESETS = [
   {
-    value: 60,
-    name: 'ค้นหาทั่วไป',
+    value: 90,
+    name: 'ค้นหากว้าง',
     icon: '🔍',
-    desc: 'ค้นหากว้าง พบรูปได้มากขึ้น เหมาะกับรูปที่ถ่ายจากไกล',
+    desc: 'พบรูปได้มากขึ้น ผลที่ไม่มั่นใจจะแยกไว้ใน "อาจจะใช่" ให้ตรวจเอง',
     borderSelected: 'border-amber-400 bg-amber-50',
     borderUnselected: 'border-gray-200 bg-white hover:border-amber-300 hover:bg-amber-50/50',
     badge: 'bg-amber-100 text-amber-700',
@@ -18,10 +22,10 @@ const PRESETS = [
     pct: 'text-amber-600',
   },
   {
-    value: 75,
-    name: 'ค้นหาละเอียด',
-    icon: '👥',
-    desc: 'สมดุล เหมาะกับรูปหมู่หรือรูปถ่ายระยะกลาง',
+    value: 95,
+    name: 'แนะนำ',
+    icon: '⭐',
+    desc: 'สมดุลดีที่สุด — ระบบยืนยันใบหน้าซ้ำอีกชั้นก่อนแสดงผล',
     borderSelected: 'border-green-400 bg-green-50',
     borderUnselected: 'border-gray-200 bg-white hover:border-green-300 hover:bg-green-50/50',
     badge: 'bg-green-100 text-green-700',
@@ -29,10 +33,10 @@ const PRESETS = [
     pct: 'text-green-600',
   },
   {
-    value: 90,
-    name: 'ค้นหารายบุคคล',
+    value: 99,
+    name: 'แม่นยำสูงสุด',
     icon: '🎯',
-    desc: 'แม่นยำสูง เหมาะเมื่อเห็นหน้าชัดเจน ภาพไม่เบลอ',
+    desc: 'เฉพาะรูปที่มั่นใจสูงมาก เหมาะเมื่อรูปต้นแบบเห็นหน้าชัดเจน',
     borderSelected: 'border-emerald-500 bg-emerald-50',
     borderUnselected: 'border-gray-200 bg-white hover:border-emerald-400 hover:bg-emerald-50/50',
     badge: 'bg-emerald-100 text-emerald-700',
