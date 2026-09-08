@@ -7,6 +7,7 @@ import type { SyncEvent } from '@/app/api/sync-drive/route'
 import { apiUrl } from '@/lib/api-url'
 import { STORAGE_KEY } from '@/components/AdminModal'
 import MultiUpload from '@/components/MultiUpload'
+import PhotoManager from '@/components/PhotoManager'
 
 function extractFolderId(input: string): string {
   const trimmed = input.trim()
@@ -720,6 +721,9 @@ export default function AdminPage() {
           )}
         </div>
       )}
+
+      {/* ── ลบรูปออกจากระบบ (อัพล่าสุดอยู่บนสุด) ── */}
+      <PhotoManager onChanged={() => setEventsVersion((v) => v + 1)} />
 
       {/* Log */}
       {log.length > 0 && (

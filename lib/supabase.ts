@@ -455,6 +455,77 @@ export async function getUploadTimesByFile(): Promise<Record<string, string>> {
   return map
 }
 
+export interface AdminPhoto {
+  id: string              // drive_file_id
+  name: string
+  eventName: string | null
+  date: string            // event_date "YYYY-MM-DD"
+  uploadedAt: string      // เวลาอัพเข้าระบบ (ISO)
+  faceCount: number       // จำนวนใบหน้าจริง (0 = ภาพบรรยากาศ)
+}
+
+/**
+ * รายการรูปทั้งหมดสำหรับหน้าจัดการ (ลบรูป) — เรียง "อัพเข้าระบบล่าสุด" ไว้บนสุด
+ * อ่านจาก face_index (มี uploaded_at เสมอ) dedupe ต่อรูป + นับใบหน้าจริง
+ */
+export async function getAdminPhotoList(): Promise<AdminPhoto[]> {
+  const supabase = getSupabaseAdmin()
+  const SIZE = 1000
+  const PARALLEL = 12
+
+  const { count, error: cErr } = await supabase
+    .from('face_index')
+    .select('id', { count: 'exact', head: true })
+  if (cErr) throw new Error(`getAdminPhotoList: ${cErr.message}`)
+  const total = count ?? 0
+  if (total === 0) return []
+
+  type Row = {
+    face_id: string | null
+    drive_file_id: string | null
+    file_name: string | null
+    event_name: string | null
+    event_date: string | null
+    uploaded_at: string | null
+  }
+  const byId = new Map<string, AdminPhoto>()
+  const pages = Math.ceil(total / SIZE)
+  for (let p = 0; p < pages; p += PARALLEL) {
+    const batch = Array.from({ length: Math.min(PARALLEL, pages - p) }, (_, i) => p + i)
+    const results = await Promise.all(
+      batch.map((pg) =>
+        supabase
+          .from('face_index')
+          .select('face_id, drive_file_id, file_name, event_name, event_date, uploaded_at')
+          .order('id', { ascending: true })
+          .range(pg * SIZE, pg * SIZE + SIZE - 1)
+      )
+    )
+    for (const r of results) {
+      if (r.error) continue
+      for (const row of (r.data ?? []) as Row[]) {
+        if (!row.drive_file_id) continue
+        const isRealFace = !!row.face_id && !row.face_id.startsWith('noface-')
+        const cur = byId.get(row.drive_file_id)
+        if (cur) {
+          if (isRealFace) cur.faceCount++
+          if ((row.uploaded_at ?? '') > cur.uploadedAt) cur.uploadedAt = row.uploaded_at!
+        } else {
+          byId.set(row.drive_file_id, {
+            id: row.drive_file_id,
+            name: row.file_name ?? '',
+            eventName: row.event_name ?? null,
+            date: row.event_date ? row.event_date.slice(0, 10) : '',
+            uploadedAt: row.uploaded_at ?? '',
+            faceCount: isRealFace ? 1 : 0,
+          })
+        }
+      }
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+}
+
 // บันทึก search log
 export async function logSearch(matchCount: number, threshold: number): Promise<void> {
   const supabase = getSupabaseAdmin()

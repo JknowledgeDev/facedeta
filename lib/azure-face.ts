@@ -300,6 +300,19 @@ export async function searchFacesByImage(
     })
 }
 
+/** ลบหลายใบหน้าออกจาก Collection (chunk ละ 1000) — คืนจำนวนที่ลบสำเร็จ */
+export async function deleteFacesFromList(faceIds: string[]): Promise<number> {
+  let removed = 0
+  for (let i = 0; i < faceIds.length; i += 1000) {
+    const chunk = faceIds.slice(i, i + 1000)
+    const res = await client.send(
+      new DeleteFacesCommand({ CollectionId: COLLECTION_ID, FaceIds: chunk })
+    )
+    removed += res.DeletedFaces?.length ?? chunk.length
+  }
+  return removed
+}
+
 /** ลบใบหน้าออกจาก Collection */
 export async function deleteFaceFromList(persistedFaceId: string): Promise<void> {
   await client.send(
