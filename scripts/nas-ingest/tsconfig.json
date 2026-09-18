@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "lib": [
+      "es2022"
+    ],
+    "types": [
+      "node"
+    ],
+    "noEmit": true,
+    "incremental": false,
+    "plugins": [],
+    "baseUrl": "../..",
+    "paths": {
+      "@/*": [
+        "./*"
+      ]
+    }
+  },
+  "include": [
+    "./*.ts",
+    "../../types/**/*.d.ts",
+    "../../*.d.ts"
+  ],
+  "exclude": []
+}

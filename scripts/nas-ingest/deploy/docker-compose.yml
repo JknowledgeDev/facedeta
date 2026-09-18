@@ -1,0 +1,26 @@
+# FaceDeta NAS ingest — รันบน Synology Container Manager (Project)
+# ก่อนใช้: 1) วางไฟล์ .env (คัดลอกจาก .env.local ของเว็บ) ไว้ในโฟลเดอร์นี้
+#          2) ถ้า share รูปไม่ใช่ /volume1/Marketing ให้แก้บรรทัด volumes ด้านล่าง
+services:
+  facedeta-nas-ingest:
+    image: node:20-bookworm-slim
+    container_name: facedeta-nas-ingest
+    working_dir: /app
+    # ครั้งแรกจะติดตั้งแพ็กเกจ (2-5 นาที) ครั้งถัดไปเร็ว
+    command: sh -c "npm install --omit=dev --no-audit --no-fund --loglevel=error && node nas-ingest.mjs"
+    env_file: .env
+    environment:
+      TZ: Asia/Bangkok
+      PHOTOS_ROOT: /photos              # จุดที่ share ถูก mount เข้า container (ไม่ต้องแก้)
+      NAS_SHARE_NAME: Marketing         # ชื่อ share ที่จะโชว์ใน path บนการ์ดรูป
+      NAS_FOLDERS: "พี่เนย,พี่ไอติม"     # โฟลเดอร์ใต้ share ที่ให้กวาด (คั่นด้วย ,) — ว่าง = ทั้ง share
+      STATE_DIR: /state
+      CONCURRENCY: "3"                  # ประมวลผลพร้อมกันกี่ไฟล์ (DS925+ 4 คอร์ → 3 กำลังดี)
+      POLL_MINUTES: "30"                # สแกนหารูปใหม่ทุกกี่นาที
+      # INGEST_APPROVED ตั้งในไฟล์ .env (ดู README-TH.md)
+    volumes:
+      - ./:/app                         # โค้ด + node_modules + .env
+      - ./state:/state                  # สถานะ/log/รายงานสแกน
+      - /volume1/Marketing:/photos:ro   # ← share รูปบน NAS (อ่านอย่างเดียว)
+    restart: unless-stopped
+    mem_limit: 3g

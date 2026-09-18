@@ -143,6 +143,13 @@ export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
           {result.file_name ?? `photo_${result.drive_file_id.slice(0, 8)}`}
         </p>
 
+        {/* รูปจาก NAS: ต้นฉบับอยู่บน NAS → บอกตำแหน่งให้ไปหยิบได้ */}
+        {result.thumbnail_url?.startsWith('nas://') && (
+          <p className="text-[11px] text-gray-500 break-all leading-snug" title="ตำแหน่งไฟล์ต้นฉบับบน NAS">
+            📂 NAS: {result.thumbnail_url.slice('nas://'.length)}
+          </p>
+        )}
+
         {formattedDate && (
           <div className="flex items-center gap-1 text-xs text-gray-400">
             <svg className="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">

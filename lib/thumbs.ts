@@ -114,8 +114,11 @@ export async function cacheAllSizes(driveFileId: string, original: Buffer): Prom
 export async function cacheAllSizesSafe(
   driveFileId: string,
   original: Buffer,
-  zone: Zone = 'public'
+  zone: Zone = 'public',
+  opts: { withOriginal?: boolean } = {}
 ): Promise<Buffer> {
+  // withOriginal=false: ต้นฉบับมีที่เก็บถาวรอื่นอยู่แล้ว (เช่น NAS) → เก็บแค่ 2000px + 500px
+  const withOriginal = opts.withOriginal ?? true
   const full = await toFullJpeg(original)
   try {
     const display = await deriveDisplay(full)
@@ -123,7 +126,7 @@ export async function cacheAllSizesSafe(
     const b = zone === 'private' ? PRIVATE_BUCKET_OF : BUCKET_OF
     if (zone === 'private') await ensurePrivateBuckets()
     await Promise.all([
-      putObject(b.original, driveFileId, full),
+      ...(withOriginal ? [putObject(b.original, driveFileId, full)] : []),
       putObject(b.display, driveFileId, display),
       putObject(b.thumb, driveFileId, thumb),
     ])

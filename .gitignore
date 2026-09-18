@@ -35,3 +35,8 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.vercel
+
+# NAS ingest bundle output (สร้างด้วย npm run build:nas) — ห้าม commit .env/state
+nas-ingest-dist/
