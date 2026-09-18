@@ -14,13 +14,12 @@ services:
       PHOTOS_ROOT: /photos              # จุดที่ share ถูก mount เข้า container (ไม่ต้องแก้)
       NAS_SHARE_NAME: Marketing         # ชื่อ share ที่จะโชว์ใน path บนการ์ดรูป
       NAS_FOLDERS: "พี่เนย,พี่ไอติม"     # โฟลเดอร์ใต้ share ที่ให้กวาด (คั่นด้วย ,) — ว่าง = ทั้ง share
-      STATE_DIR: /state
+      STATE_DIR: /app/state             # อยู่ในโฟลเดอร์โปรเจกต์ที่ mount อยู่แล้ว (โปรแกรมสร้างเอง)
       CONCURRENCY: "3"                  # ประมวลผลพร้อมกันกี่ไฟล์ (DS925+ 4 คอร์ → 3 กำลังดี)
       POLL_MINUTES: "30"                # สแกนหารูปใหม่ทุกกี่นาที
       # INGEST_APPROVED ตั้งในไฟล์ .env (ดู README-TH.md)
     volumes:
-      - ./:/app                         # โค้ด + node_modules + .env
-      - ./state:/state                  # สถานะ/log/รายงานสแกน
+      - ./:/app                         # โค้ด + node_modules + .env + state/ (สร้างเอง)
       - /volume1/Marketing:/photos:ro   # ← share รูปบน NAS (อ่านอย่างเดียว)
     restart: unless-stopped
     mem_limit: 3g
