@@ -4,9 +4,12 @@
   "type": "module",
   "description": "FaceDeta — ดึงรูปจาก NAS เข้าโซนส่วนตัว (รันใน Docker บน Synology)",
   "dependencies": {
-    "@aws-sdk/client-rekognition": "^3.1014.0",
-    "@supabase/supabase-js": "^2.45.4",
-    "heic-convert": "^2.1.0",
-    "sharp": "^0.34.5"
+    "@aws-sdk/client-rekognition": "3.1014.0",
+    "@supabase/supabase-js": "2.99.3",
+    "heic-convert": "2.1.0",
+    "sharp": "0.34.5"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }

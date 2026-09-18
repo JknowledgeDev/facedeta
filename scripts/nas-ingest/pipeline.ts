@@ -253,9 +253,16 @@ let stopping = false
 process.on('SIGTERM', () => { stopping = true; log('ได้รับสัญญาณหยุด — จะหยุดหลังจบไฟล์ปัจจุบัน') })
 process.on('SIGINT', () => { stopping = true })
 process.on('unhandledRejection', (e) => log('unhandled: ' + ((e as Error)?.message ?? e)))
+process.on('uncaughtException', (e) => { log('FATAL: ' + (e?.stack ?? e?.message ?? e)); setTimeout(() => process.exit(1), 60_000) })
+if (parseInt(process.versions.node.split('.')[0], 10) < 22) {
+  log(`FATAL: ต้องใช้ Node 22 ขึ้นไป (ตอนนี้ ${process.version}) — แก้ image ใน docker-compose.yml เป็น node:22-bookworm-slim`)
+  await sleep(60_000)
+  process.exit(1)
+}
 
-log(`=== FaceDeta NAS ingest เริ่มทำงาน (root=${PHOTOS_ROOT}, folders=${NAS_FOLDERS.join(',') || 'ทั้งหมด'}, approved=${APPROVED}, concurrency=${CONCURRENCY}) ===`)
+log(`=== FaceDeta NAS ingest เริ่มทำงาน (node ${process.version}, root=${PHOTOS_ROOT}, folders=${NAS_FOLDERS.join(',') || 'ทั้งหมด'}, approved=${APPROVED}, concurrency=${CONCURRENCY}) ===`)
 
+try {
 while (!stopping) {
   const state = loadState()
   const files = scanAll()
@@ -321,6 +328,12 @@ while (!stopping) {
   if (stopping || RUN_ONCE) break
   log(`พักรอไฟล์ใหม่ ${POLL_MINUTES} นาที`)
   for (let i = 0; i < POLL_MINUTES * 60 && !stopping; i += 5) await sleep(5000)
+}
+} catch (e) {
+  // ล้มทั้งรอบ (เช่น เชื่อมต่อ Supabase/AWS ไม่ได้) → บอกสาเหตุชัดๆ แล้วรอ 1 นาทีก่อนให้ Docker รีสตาร์ท
+  log('FATAL: ' + ((e as Error)?.stack ?? (e as Error)?.message ?? e))
+  await sleep(60_000)
+  process.exit(1)
 }
 log('หยุดทำงานแล้ว')
 process.exit(0)

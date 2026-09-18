@@ -3,7 +3,7 @@
 #          2) ถ้า share รูปไม่ใช่ /volume1/Marketing ให้แก้บรรทัด volumes ด้านล่าง
 services:
   facedeta-nas-ingest:
-    image: node:20-bookworm-slim
+    image: node:22-bookworm-slim   # ต้อง Node 22+ (supabase-js ใช้ WebSocket ในตัว)
     container_name: facedeta-nas-ingest
     working_dir: /app
     # ครั้งแรกจะติดตั้งแพ็กเกจ (2-5 นาที) ครั้งถัดไปเร็ว
