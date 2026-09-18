@@ -81,12 +81,12 @@ export async function toFullJpeg(original: Buffer): Promise<Buffer> {
 }
 
 async function deriveDisplay(full: Buffer): Promise<Buffer> {
-  return sharp(full).rotate()
+  return sharp(full, { failOn: 'none' }).rotate()
     .resize(DISPLAY_SIZE, DISPLAY_SIZE, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 82, mozjpeg: true }).toBuffer()
 }
 async function deriveThumb(display: Buffer): Promise<Buffer> {
-  return sharp(display)
+  return sharp(display, { failOn: 'none' })
     .resize(THUMB_SIZE, THUMB_SIZE, { fit: 'inside', withoutEnlargement: true })
     .jpeg({ quality: 75, mozjpeg: true }).toBuffer()
 }

@@ -27,6 +27,7 @@ const CONCURRENCY = Math.max(1, parseInt(process.env.CONCURRENCY ?? '3', 10) || 
 const POLL_MINUTES = Math.max(1, parseInt(process.env.POLL_MINUTES ?? '30', 10) || 30)
 const APPROVED = /^(yes|true|1)$/i.test(process.env.INGEST_APPROVED ?? '')
 const RUN_ONCE = /^(yes|true|1)$/i.test(process.env.RUN_ONCE ?? '')   // ทำรอบเดียวแล้วจบ (ทดสอบ/cron)
+const BUNDLE_VERSION = 6              // เพิ่มเมื่อแก้ตัวแปลงรูป → ไฟล์ที่เคย error จะถูกลองใหม่อีก 3 ครั้ง
 const MAX_ATTEMPTS = 3
 const MIN_AGE_MS = 2 * 60 * 1000   // ไฟล์ที่เพิ่งเขียนไม่ถึง 2 นาที → รอรอบหน้า (อาจกำลังคัดลอก)
 
@@ -51,7 +52,7 @@ const thaiDate = (ms: number) => new Date(ms + 7 * 3600 * 1000).toISOString().sl
 
 // ─── state ────────────────────────────────────────────────────────────────────
 type Status = 'done' | 'dup' | 'error'
-interface Entry { size: number; mtime: number; status: Status; id?: string; attempts?: number; error?: string; faces?: number }
+interface Entry { size: number; mtime: number; status: Status; id?: string; attempts?: number; error?: string; faces?: number; v?: number }
 type State = Record<string, Entry>   // key = path สัมพัทธ์จาก PHOTOS_ROOT
 
 function loadState(): State {
@@ -264,7 +265,7 @@ if (parseInt(process.versions.node.split('.')[0], 10) < 22) {
   process.exit(1)
 }
 
-log(`=== FaceDeta NAS ingest เริ่มทำงาน (node ${process.version}, root=${PHOTOS_ROOT}, folders=${NAS_FOLDERS.join(',') || 'ทั้งหมด'}, approved=${APPROVED}, concurrency=${CONCURRENCY}) ===`)
+log(`=== FaceDeta NAS ingest v${BUNDLE_VERSION} เริ่มทำงาน (node ${process.version}, root=${PHOTOS_ROOT}, folders=${NAS_FOLDERS.join(',') || 'ทั้งหมด'}, approved=${APPROVED}, concurrency=${CONCURRENCY}) ===`)
 
 try {
 while (!stopping) {
@@ -276,7 +277,7 @@ while (!stopping) {
     const e = state[f.rel]
     if (!e) return true
     if (e.size !== f.size || Math.abs(e.mtime - f.mtime) > 1000) return true   // ไฟล์เปลี่ยน
-    if (e.status === 'error') return (e.attempts ?? 0) < MAX_ATTEMPTS
+    if (e.status === 'error') return e.v !== BUNDLE_VERSION || (e.attempts ?? 0) < MAX_ATTEMPTS
     return false
   })
   writeReport(files, pending, state)
@@ -311,7 +312,7 @@ while (!stopping) {
         const prev = state[f.rel]
         if (outcome.status === 'done') { done++; if (outcome.faces > 0) faces += outcome.faces; state[f.rel] = { size: f.size, mtime: f.mtime, status: 'done', id: outcome.id, faces: outcome.faces } }
         else if (outcome.status === 'dup') { dup++; state[f.rel] = { size: f.size, mtime: f.mtime, status: 'dup', id: outcome.id } }
-        else { err++; state[f.rel] = { size: f.size, mtime: f.mtime, status: 'error', attempts: (prev?.attempts ?? 0) + 1, error: outcome.error }; log(`ERR ${f.rel}: ${outcome.error}`) }
+        else { err++; state[f.rel] = { size: f.size, mtime: f.mtime, status: 'error', v: BUNDLE_VERSION, attempts: (prev?.v === BUNDLE_VERSION ? prev.attempts ?? 0 : 0) + 1, error: outcome.error }; log(`ERR ${f.rel}: ${outcome.error}`) }
         const n = done + dup + err
         if (n % 50 === 0 || n === total) {
           const el = (Date.now() - t0) / 1000

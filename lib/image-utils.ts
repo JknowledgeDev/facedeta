@@ -120,7 +120,7 @@ async function extractEmbeddedJpeg(buf: Buffer): Promise<Buffer | null> {
  *  - TIFF → เปิดแบบ unlimited (ไฟล์จาก Photoshop ขนาดหลายร้อย MB ชน memory limit ของ libtiff)
  *    ถ้า sharp เปิด TIFF ไม่ได้ = RAW ที่อิง TIFF (ARW/NEF/DNG) → ใช้ JPEG ที่ฝังแทน
  */
-async function prepareInput(input: Buffer): Promise<{ buf: Buffer; opts: sharp.SharpOptions }> {
+async function prepareInput(input: Buffer): Promise<{ buf: Buffer; opts: sharp.SharpOptions; tiffSource?: Buffer }> {
   let buf = input
   if (buf.length === 0) throw new Error('ไฟล์ว่าง (0 bytes)')
 
@@ -141,7 +141,8 @@ async function prepareInput(input: Buffer): Promise<{ buf: Buffer; opts: sharp.S
     const opts: sharp.SharpOptions = { ...LENIENT, unlimited: true }
     try {
       await sharp(buf, opts).metadata()
-      return { buf, opts }
+      // metadata อ่านได้ แต่ NEF/DNG บางไฟล์ยัง decode จริงไม่ผ่าน ("error in tile") → เก็บต้นฉบับไว้ถอยไปใช้ JPEG ที่ฝัง
+      return { buf, opts, tiffSource: buf }
     } catch (e) {
       const embedded = await extractEmbeddedJpeg(buf)
       if (embedded) return { buf: embedded, opts: LENIENT }
@@ -170,7 +171,25 @@ export async function toJpegBuffer(
   maxBytes = 0,
   quality = 85,   // คุณภาพ JPEG (ใช้เมื่อไม่มี maxBytes)
 ): Promise<Buffer> {
-  const { buf, opts } = await prepareInput(input)
+  const prepared = await prepareInput(input)
+  try {
+    return await encode(prepared.buf, prepared.opts, maxSize, maxBytes, quality)
+  } catch (e) {
+    // TIFF-based RAW (NEF/DNG) ที่ metadata ผ่านแต่ decode จริงล้ม → ใช้ JPEG ที่กล้องฝังไว้แทน
+    if (!prepared.tiffSource) throw e
+    const embedded = await extractEmbeddedJpeg(prepared.tiffSource)
+    if (!embedded) throw e
+    return encode(embedded, LENIENT, maxSize, maxBytes, quality)
+  }
+}
+
+async function encode(
+  buf: Buffer,
+  opts: sharp.SharpOptions,
+  maxSize: number,
+  maxBytes: number,
+  quality: number,
+): Promise<Buffer> {
   const open = () => sharp(buf, opts).rotate()
 
   // ── ไม่มี constraint → เร็วสุด: แค่ rotate + convert ──────────────
