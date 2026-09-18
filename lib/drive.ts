@@ -178,7 +178,7 @@ async function listAllImagesRecursive(rootFolderId: string): Promise<RawDriveIma
         if (name.startsWith('._')) continue
         // รับเฉพาะ: mimeType เป็นรูป หรือนามสกุล .cr3/.cr2 จริงๆ
         const isImage = (f.mimeType ?? '').startsWith('image/')
-        const isRaw = /\.(cr3|cr2)$/i.test(name)
+        const isRaw = /\.(cr3|cr2|arw|rw2|nef|dng)$/i.test(name)
         if (!isImage && !isRaw) continue
         images.push({ id: f.id, name, createdTime: f.createdTime ?? '' })
       }
