@@ -6,8 +6,17 @@ services:
     image: node:22-bookworm-slim   # ต้อง Node 22+ (supabase-js ใช้ WebSocket ในตัว)
     container_name: facedeta-nas-ingest
     working_dir: /app
-    # ครั้งแรกจะติดตั้งแพ็กเกจ (2-5 นาที) ครั้งถัดไปเร็ว
-    command: sh -c "npm install --omit=dev --no-audit --no-fund --loglevel=error && node nas-ingest.mjs"
+    # ครั้งแรกติดตั้งแพ็กเกจ (2-5 นาที) — ครั้งถัดไปข้าม npm ไปเลยถ้าติดตั้งครบแล้ว
+    # ถ้า npm ล้ม (เช่น "Tracker idealTree already exists" จาก node_modules ค้าง) → ล้างแล้วติดตั้งใหม่เอง
+    command: >
+      sh -c "
+        if [ ! -f node_modules/sharp/package.json ] || [ ! -f node_modules/@supabase/supabase-js/package.json ]; then
+          npm install --omit=dev --no-audit --no-fund --loglevel=error ||
+          ( echo 'npm install ล้ม → ล้าง node_modules แล้วติดตั้งใหม่' && rm -rf node_modules package-lock.json &&
+            npm install --omit=dev --no-audit --no-fund --loglevel=error );
+        fi &&
+        node nas-ingest.mjs
+      "
     env_file: .env
     environment:
       TZ: Asia/Bangkok
