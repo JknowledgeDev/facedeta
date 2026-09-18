@@ -97,14 +97,17 @@ function scanAll(): Found[] {
   return out
 }
 
-/** ชื่อกิจกรรมจาก path สัมพัทธ์: "บนสุด" หรือ "บนสุด › โฟลเดอร์ที่เก็บไฟล์" */
-function eventNameOf(rel: string): string {
+/**
+ * ชื่อกิจกรรมจาก path สัมพัทธ์ = ทุกโฟลเดอร์ต่อกันด้วย " › " (เก็บชื่องานที่อยู่ชั้นกลางไว้ด้วย)
+ *   พี่เนย/Med 2026/รูปเช้า3/IMG.jpg → "พี่เนย › Med 2026 › รูปเช้า3"
+ * ลึกเกิน 4 ชั้น → 3 ชั้นแรก › … › ชั้นสุดท้าย
+ */
+export function eventNameOf(rel: string): string {
   const parts = rel.split('/')
   parts.pop()
   if (parts.length === 0) return SHARE_NAME
-  const top = parts[0]
-  const parent = parts[parts.length - 1]
-  return parent === top ? top : `${top} › ${parent}`
+  if (parts.length <= 4) return parts.join(' › ')
+  return `${parts.slice(0, 3).join(' › ')} › … › ${parts[parts.length - 1]}`
 }
 
 // ─── ชุด md5 ของรูปที่อยู่ในระบบแล้ว (กันซ้ำ) ───────────────────────────────────
