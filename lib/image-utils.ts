@@ -1,5 +1,11 @@
 import sharp from 'sharp'
 
+/**
+ * ไฟล์จากกล้อง (NEF/TIFF/JPEG บางตัว) มี metadata ไม่เป๊ะ เช่น tag Artist มี null byte
+ * ค่าเริ่มต้นของ sharp (failOn: 'warning') จะโยน error ทั้งที่ decode รูปได้ → ผ่อนปรนเป็น 'none'
+ */
+const LENIENT: sharp.SharpOptions = { failOn: 'none' }
+
 /** AWS Rekognition hard limit สำหรับ image.bytes */
 export const AWS_MAX_BYTES = 5 * 1024 * 1024 // 5 MB = 5,242,880 bytes
 /** ด้านยาวสุดที่ส่งให้ Rekognition — รูปใหญ่กว่านี้ AWS ตอบ "invalid image format" (พาโนรามา/ไฟล์กราฟิก) */
@@ -98,7 +104,7 @@ async function extractEmbeddedJpeg(buf: Buffer): Promise<Buffer | null> {
     if (sp.e - sp.s < 2048) break
     const cand = buf.subarray(sp.s, sp.e)
     try {
-      const m = await sharp(cand).metadata()
+      const m = await sharp(cand, LENIENT).metadata()
       if ((m.width ?? 0) >= 480) return cand
     } catch {
       // ไม่ใช่ JPEG จริง → ลองช่วงถัดไป
@@ -121,29 +127,29 @@ async function prepareInput(input: Buffer): Promise<{ buf: Buffer; opts: sharp.S
   if (isRawBuffer(buf)) {
     const embedded = await extractEmbeddedJpeg(buf)
     if (!embedded) throw new Error('RAW file has no usable embedded JPEG preview')
-    return { buf: embedded, opts: {} }
+    return { buf: embedded, opts: LENIENT }
   }
 
   if (isHeicBuffer(buf)) {
     const heicConvert = (await import('heic-convert')).default
     const ab = await heicConvert({ buffer: buf, format: 'JPEG', quality: 0.9 })
     buf = Buffer.from(ab)
-    return { buf, opts: {} }
+    return { buf, opts: LENIENT }
   }
 
   if (isTiffBuffer(buf)) {
-    const opts: sharp.SharpOptions = { unlimited: true }
+    const opts: sharp.SharpOptions = { ...LENIENT, unlimited: true }
     try {
       await sharp(buf, opts).metadata()
       return { buf, opts }
     } catch (e) {
       const embedded = await extractEmbeddedJpeg(buf)
-      if (embedded) return { buf: embedded, opts: {} }
+      if (embedded) return { buf: embedded, opts: LENIENT }
       throw e
     }
   }
 
-  return { buf, opts: {} }
+  return { buf, opts: LENIENT }
 }
 
 /**
