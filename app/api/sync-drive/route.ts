@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server'
-import { addFaceToList } from '@/lib/azure-face'
-import { saveFaceMapping, savePhotoIndex, saveNoFacePlaceholder, isPhotoProcessed } from '@/lib/supabase'
+import { addFaceToList, collectionOf } from '@/lib/azure-face'
+import { saveFaceMapping, savePhotoIndex, saveNoFacePlaceholder, isPhotoProcessed, isFileIndexed } from '@/lib/supabase'
+import { isUnlocked } from '@/lib/auth'
+import { parseZone } from '@/lib/zone'
 import { downloadFileAsBuffer, getDriveViewUrl } from '@/lib/drive'
 import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
 import { cacheAllSizesSafe } from '@/lib/thumbs'
@@ -11,6 +13,9 @@ export const maxDuration = 300
 interface BatchFile {
   id: string
   name: string
+  // โซนส่วนตัว: ชื่อกิจกรรม/วันที่รายไฟล์ (ตั้งอัตโนมัติจากโฟลเดอร์) — ถ้ามีจะใช้แทนค่ารวมของ batch
+  eventName?: string
+  eventDate?: string
 }
 
 export interface SyncEvent {
@@ -32,6 +37,14 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}))
   const eventName: string = body.eventName ?? ''
   const eventDate: string = body.eventDate ?? ''
+  // โซนส่วนตัว = ตาราง/คลังใบหน้า/bucket แยก + ดึงไฟล์ด้วยบัญชี Drive ส่วนตัว (ต้องใส่รหัสแล้ว)
+  const zone = parseZone(body.zone)
+  if (zone === 'private' && !isUnlocked(req)) {
+    return new Response(JSON.stringify({ error: 'กรุณาใส่รหัสผู้ดูแลก่อน' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
   // batch ของไฟล์ที่ client ส่งมา index (จาก /api/sync-list)
   const files: BatchFile[] = Array.isArray(body.files) ? body.files : []
   // counters สะสมจาก batch ก่อนหน้า
@@ -61,7 +74,12 @@ export async function POST(req: NextRequest) {
       try {
         for (const file of files) {
           // ข้ามรูปที่ประมวลผลแล้ว (ทั้งรูปที่มีหน้าและไม่มีหน้า)
-          if (await isPhotoProcessed(file.id)) {
+          const evName = file.eventName || eventName || undefined
+          const evDate = file.eventDate || eventDate || undefined
+          const processed = zone === 'private'
+            ? await isFileIndexed(file.id, 'private')
+            : await isPhotoProcessed(file.id)
+          if (processed) {
             countSkipped++
             totalProcessed++
             send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'skipped', ...stats() })
@@ -76,34 +94,36 @@ export async function POST(req: NextRequest) {
                 await new Promise((r) => setTimeout(r, 3000 * attempt))
               }
 
-              const buffer = await downloadFileAsBuffer(file.id)
+              const buffer = await downloadFileAsBuffer(file.id, zone === 'private' ? 'private' : 'app')
               // เก็บสำเนา "ต้นฉบับเต็ม + 2000px + 500px" ลง CDN — ที่เก็บรูปจริงของระบบ
               // (Drive ลบทิ้งได้หลัง sync) แล้วได้ JPEG เต็มความละเอียดกลับมาใช้ index ต่อ
-              const fullJpeg = await cacheAllSizesSafe(file.id, buffer)
+              const fullJpeg = await cacheAllSizesSafe(file.id, buffer, zone)
               const jpeg = await toJpegBuffer(fullJpeg, 0, AWS_MAX_BYTES)
-              const faceResults = await addFaceToList(jpeg, file.id)
+              const faceResults = await addFaceToList(jpeg, file.id, collectionOf(zone))
               const viewUrl = getDriveViewUrl(file.id)
 
-              // เก็บ "ทุกรูป" ลง photo_index เสมอ แม้ไม่พบใบหน้า
-              await savePhotoIndex({
-                driveFileId: file.id,
-                fileName: file.name,
-                eventName: eventName || undefined,
-                eventDate: eventDate || undefined,
-                thumbnailUrl: viewUrl,
-                hasFace: faceResults.length > 0,
-                faceCount: faceResults.length,
-              })
+              // เก็บ "ทุกรูป" ลง photo_index เสมอ แม้ไม่พบใบหน้า (เฉพาะโซนสาธารณะ)
+              if (zone === 'public') {
+                await savePhotoIndex({
+                  driveFileId: file.id,
+                  fileName: file.name,
+                  eventName: evName,
+                  eventDate: evDate,
+                  thumbnailUrl: viewUrl,
+                  hasFace: faceResults.length > 0,
+                  faceCount: faceResults.length,
+                })
+              }
 
               if (faceResults.length === 0) {
                 // ไม่พบใบหน้า → ลงเป็น "ภาพบรรยากาศ" ให้โผล่ใน gallery ด้วย
                 await saveNoFacePlaceholder({
                   driveFileId: file.id,
                   fileName: file.name,
-                  eventName: eventName || undefined,
-                  eventDate: eventDate || undefined,
+                  eventName: evName,
+                  eventDate: evDate,
                   thumbnailUrl: viewUrl,
-                })
+                }, zone)
                 countNoFace++
                 totalProcessed++
                 send({ type: 'progress', fileName: file.name, fileId: file.id, status: 'no_face', ...stats() })
@@ -116,10 +136,10 @@ export async function POST(req: NextRequest) {
                     faceId: f.persistedFaceId,
                     driveFileId: file.id,
                     fileName: file.name,
-                    eventName: eventName || undefined,
-                    eventDate: eventDate || undefined,
+                    eventName: evName,
+                    eventDate: evDate,
                     thumbnailUrl: viewUrl,
-                  })
+                  }, zone)
                 )
               )
 

@@ -1,4 +1,11 @@
 import { createClient } from '@supabase/supabase-js'
+import type { Zone } from '@/lib/zone'
+
+/** ตาราง mapping ใบหน้าของแต่ละโซน — โซนส่วนตัวแยกตาราง (RLS ปิดตาย อ่านได้เฉพาะ service role) */
+const FACE_TABLE: Record<Zone, 'face_index' | 'private_face_index'> = {
+  public: 'face_index',
+  private: 'private_face_index',
+}
 
 export interface FaceIndexRow {
   id: string
@@ -23,6 +30,8 @@ export interface SearchResult extends FaceIndexRow {
   probeHits?: number
   /** ตำแหน่งใบหน้าที่ match ในรูป (สัดส่วน 0–1) */
   bbox?: { left: number; top: number; width: number; height: number }
+  /** โซนของรูป — 'private' ต้องโหลดรูปผ่าน /api/private/image (ตรวจรหัส) */
+  zone?: Zone
 }
 
 export interface GalleryPhoto {
@@ -43,13 +52,15 @@ function isMissingTable(error: { code?: string; message?: string } | null): bool
  * อ่านรูปทีละหน้า (1000 แถว) จากตารางที่กำหนด → รวมเป็น GalleryPhoto dedupe ตาม id
  * คืน null ถ้าตารางไม่มีอยู่ (ให้ caller fallback ไปตารางอื่น)
  */
-async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<GalleryPhoto[] | null> {
+async function readGalleryFrom(
+  table: 'photo_index' | 'face_index' | 'private_face_index'
+): Promise<GalleryPhoto[] | null> {
   const supabase = getSupabaseAdmin()
   const SIZE = 1000
   const PARALLEL = 12
   // สำคัญ: paginate ด้วย .range() ต้องมี .order() ด้วย unique key เสมอ
   // ไม่งั้น Postgres ไม่รับประกันลำดับ → แถวสลับหน้า → บางรูป "หาย" จากผลลัพธ์
-  const orderCol = table === 'face_index' ? 'id' : 'drive_file_id'
+  const orderCol = table === 'photo_index' ? 'drive_file_id' : 'id'
 
   // 1) นับแถวทั้งหมดก่อน (ตรวจว่าตารางมีอยู่ไปในตัว)
   const { count, error: cErr } = await supabase
@@ -109,11 +120,16 @@ async function readGalleryFrom(table: 'photo_index' | 'face_index'): Promise<Gal
  * (เข้ากันได้ทั้งก่อน/หลังรัน schema.sql สร้าง photo_index)
  * เรียงใหม่สุดก่อน: event_date ลง, ชื่อไฟล์ลง
  */
-export async function getGalleryPhotos(): Promise<GalleryPhoto[]> {
-  // ลอง photo_index ก่อน — ถ้าตารางยังไม่มี (null) หรือว่างเปล่า → ใช้ face_index
-  let out = await readGalleryFrom('photo_index')
-  if (!out || out.length === 0) {
-    out = (await readGalleryFrom('face_index')) ?? []
+export async function getGalleryPhotos(zone: Zone = 'public'): Promise<GalleryPhoto[]> {
+  let out: GalleryPhoto[] | null
+  if (zone === 'private') {
+    out = (await readGalleryFrom('private_face_index')) ?? []
+  } else {
+    // ลอง photo_index ก่อน — ถ้าตารางยังไม่มี (null) หรือว่างเปล่า → ใช้ face_index
+    out = await readGalleryFrom('photo_index')
+    if (!out || out.length === 0) {
+      out = (await readGalleryFrom('face_index')) ?? []
+    }
   }
 
   // ใหม่สุดก่อน: วันกิจกรรมลง, ชื่อไฟล์ numeric ลง, เวลา sync ลง
@@ -151,9 +167,9 @@ export async function saveFaceMapping(data: {
   eventName?: string
   eventDate?: string
   thumbnailUrl?: string
-}): Promise<void> {
+}, zone: Zone = 'public'): Promise<void> {
   const supabase = getSupabaseAdmin()
-  const { error } = await supabase.from('face_index').upsert(
+  const { error } = await supabase.from(FACE_TABLE[zone]).upsert(
     {
       face_id: data.faceId,
       drive_file_id: data.driveFileId,
@@ -178,7 +194,7 @@ export async function saveNoFacePlaceholder(data: {
   eventName?: string
   eventDate?: string
   thumbnailUrl?: string
-}): Promise<void> {
+}, zone: Zone = 'public'): Promise<void> {
   await saveFaceMapping({
     faceId: `noface-${data.driveFileId}`,
     driveFileId: data.driveFileId,
@@ -186,7 +202,7 @@ export async function saveNoFacePlaceholder(data: {
     eventName: data.eventName,
     eventDate: data.eventDate,
     thumbnailUrl: data.thumbnailUrl,
-  })
+  }, zone)
 }
 
 // บันทึก "1 รูป" ลง photo_index (เก็บทุกรูป แม้ไม่มีใบหน้า)
@@ -258,11 +274,11 @@ export async function isPhotoProcessed(driveFileId: string): Promise<boolean> {
 }
 
 // ค้นหา records จาก faceIds ที่ได้จาก Rekognition
-export async function getFaceRecordsByIds(faceIds: string[]): Promise<FaceIndexRow[]> {
+export async function getFaceRecordsByIds(faceIds: string[], zone: Zone = 'public'): Promise<FaceIndexRow[]> {
   if (faceIds.length === 0) return []
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
-    .from('face_index')
+    .from(FACE_TABLE[zone])
     .select('*')
     .in('face_id', faceIds)
 
@@ -271,10 +287,10 @@ export async function getFaceRecordsByIds(faceIds: string[]): Promise<FaceIndexR
 }
 
 // ตรวจว่า driveFileId ถูก index แล้วหรือยัง
-export async function isFileIndexed(driveFileId: string): Promise<boolean> {
+export async function isFileIndexed(driveFileId: string, zone: Zone = 'public'): Promise<boolean> {
   const supabase = getSupabaseAdmin()
   const { count } = await supabase
-    .from('face_index')
+    .from(FACE_TABLE[zone])
     .select('*', { count: 'exact', head: true })
     .eq('drive_file_id', driveFileId)
 
@@ -282,10 +298,10 @@ export async function isFileIndexed(driveFileId: string): Promise<boolean> {
 }
 
 // ลบ records ของ driveFileId (ทั้ง face_index และ photo_index)
-export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<string[]> {
+export async function deleteFaceMappingsByFileId(driveFileId: string, zone: Zone = 'public'): Promise<string[]> {
   const supabase = getSupabaseAdmin()
   const { data, error } = await supabase
-    .from('face_index')
+    .from(FACE_TABLE[zone])
     .delete()
     .eq('drive_file_id', driveFileId)
     .select('face_id')
@@ -295,6 +311,9 @@ export async function deleteFaceMappingsByFileId(driveFileId: string): Promise<s
   const realFaceIds = (data ?? [])
     .map((r: { face_id: string }) => r.face_id)
     .filter((id: string) => !id.startsWith('noface-'))
+
+  // โซนส่วนตัวไม่มี photo_index
+  if (zone === 'private') return realFaceIds
 
   // ลบออกจาก photo_index ด้วย เพื่อให้แกลเลอรี/สถิติไม่ค้าง
   const { error: pErr } = await supabase
@@ -468,13 +487,14 @@ export interface AdminPhoto {
  * รายการรูปทั้งหมดสำหรับหน้าจัดการ (ลบรูป) — เรียง "อัพเข้าระบบล่าสุด" ไว้บนสุด
  * อ่านจาก face_index (มี uploaded_at เสมอ) dedupe ต่อรูป + นับใบหน้าจริง
  */
-export async function getAdminPhotoList(): Promise<AdminPhoto[]> {
+export async function getAdminPhotoList(zone: Zone = 'public'): Promise<AdminPhoto[]> {
   const supabase = getSupabaseAdmin()
+  const table = FACE_TABLE[zone]
   const SIZE = 1000
   const PARALLEL = 12
 
   const { count, error: cErr } = await supabase
-    .from('face_index')
+    .from(table)
     .select('id', { count: 'exact', head: true })
   if (cErr) throw new Error(`getAdminPhotoList: ${cErr.message}`)
   const total = count ?? 0
@@ -495,7 +515,7 @@ export async function getAdminPhotoList(): Promise<AdminPhoto[]> {
     const results = await Promise.all(
       batch.map((pg) =>
         supabase
-          .from('face_index')
+          .from(table)
           .select('face_id, drive_file_id, file_name, event_name, event_date, uploaded_at')
           .order('id', { ascending: true })
           .range(pg * SIZE, pg * SIZE + SIZE - 1)
@@ -524,6 +544,38 @@ export async function getAdminPhotoList(): Promise<AdminPhoto[]> {
     }
   }
   return Array.from(byId.values()).sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
+}
+
+/**
+ * drive_file_id ทั้งหมดที่อยู่ในโซนนั้นแล้ว — ใช้กรองรูปที่ sync แล้วออกก่อนส่งรายการให้ client
+ * (อ่านขนานทีละ 12 หน้า, order ด้วย unique key กันแถวสลับหน้า)
+ */
+export async function getAllFileIds(zone: Zone): Promise<Set<string>> {
+  const supabase = getSupabaseAdmin()
+  const table = FACE_TABLE[zone]
+  const SIZE = 1000
+  const PARALLEL = 12
+  const out = new Set<string>()
+
+  const { count, error } = await supabase.from(table).select('id', { count: 'exact', head: true })
+  if (error) throw new Error(`getAllFileIds ${table}: ${error.message}`)
+  const pages = Math.ceil((count ?? 0) / SIZE)
+  for (let p = 0; p < pages; p += PARALLEL) {
+    const batch = Array.from({ length: Math.min(PARALLEL, pages - p) }, (_, i) => p + i)
+    const results = await Promise.all(
+      batch.map((pg) =>
+        supabase.from(table).select('drive_file_id').order('id', { ascending: true })
+          .range(pg * SIZE, pg * SIZE + SIZE - 1)
+      )
+    )
+    for (const r of results) {
+      if (r.error) throw new Error(`getAllFileIds ${table}: ${r.error.message}`)
+      for (const row of (r.data ?? []) as { drive_file_id: string | null }[]) {
+        if (row.drive_file_id) out.add(row.drive_file_id)
+      }
+    }
+  }
+  return out
 }
 
 // บันทึก search log

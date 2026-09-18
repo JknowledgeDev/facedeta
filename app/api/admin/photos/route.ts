@@ -1,5 +1,7 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { getAdminPhotoList } from '@/lib/supabase'
+import { isUnlocked } from '@/lib/auth'
+import { parseZone } from '@/lib/zone'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -10,9 +12,13 @@ export const dynamic = 'force-dynamic'
  * รูปแบบย่อ: events เป็นตารางชื่อ แต่ละรูปอ้างอิงด้วย index
  * [id, name, eventIdx, date, uploadedAt, faceCount]
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const photos = await getAdminPhotoList()
+    const zone = parseZone(req.nextUrl.searchParams.get('zone'))
+    if (zone === 'private' && !isUnlocked(req)) {
+      return NextResponse.json({ error: 'กรุณาใส่รหัสผู้ดูแลก่อน' }, { status: 401 })
+    }
+    const photos = await getAdminPhotoList(zone)
 
     const events: string[] = []
     const eventIdx = new Map<string, number>()

@@ -43,15 +43,32 @@ interface Counters {
 
 type Phase = 'idle' | 'counting' | 'syncing' | 'done' | 'stopped'
 
+interface SyncFile {
+  id: string
+  name: string
+  // โซนส่วนตัว: ชื่อกิจกรรม/วันที่อัตโนมัติจากโฟลเดอร์ (รายไฟล์)
+  eventName?: string
+  eventDate?: string
+}
+
 const ZERO: Counters = { processed: 0, faces: 0, indexed: 0, skipped: 0, noFace: 0, error: 0 }
 
 export default function AdminPage() {
   const router = useRouter()
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (localStorage.getItem(STORAGE_KEY) !== '1') router.replace('/')
-    }
+    if (typeof window === 'undefined') return
+    if (localStorage.getItem(STORAGE_KEY) !== '1') { router.replace('/'); return }
+    // รหัสตรวจที่ server แล้ว — ถ้า cookie หมดอายุ/ไม่มี ให้กลับไปใส่รหัสใหม่
+    fetch(apiUrl('/api/auth/unlock'), { cache: 'no-store' })
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d.unlocked) { localStorage.removeItem(STORAGE_KEY); router.replace('/') }
+      })
+      .catch(() => { /* ออฟไลน์ชั่วคราว — ปล่อยผ่าน API จะตรวจเองอีกชั้น */ })
   }, [router])
+
+  // โซนที่จะ sync: สาธารณะ (โฟลเดอร์งาน) หรือ ส่วนตัว (กวาดทั้งบัญชี Drive ส่วนตัว)
+  const [syncZone, setSyncZone] = useState<'public' | 'private'>('public')
 
   // Settings
   const [showSettings, setShowSettings] = useState(false)
@@ -160,7 +177,7 @@ export default function AdminPage() {
   const stopRef = useRef(false)
   const abortRef = useRef<AbortController | null>(null)
   // รายการไฟล์ทั้งหมด (จาก /api/sync-list) — scan ครั้งเดียว
-  const filesRef = useRef<{ id: string; name: string }[]>([])
+  const filesRef = useRef<SyncFile[]>([])
 
   // elapsed timer
   useEffect(() => {
@@ -180,22 +197,41 @@ export default function AdminPage() {
     : null
 
   // ─── ขั้น 1: scan รายการไฟล์ทั้งหมด (รวมทุก subfolder) ────────────
-  const fetchFileList = useCallback(async (): Promise<{ id: string; name: string }[]> => {
+  const fetchFileList = useCallback(async (): Promise<SyncFile[]> => {
     setPhase('counting')
+
+    if (syncZone === 'private') {
+      // กวาดทั้งบัญชี Drive ส่วนตัว — server ตัดรูปที่อยู่ในระบบแล้วออกให้ (ทั้งสองโซน)
+      const res = await fetch(apiUrl('/api/sync-list?zone=private'))
+      const d = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(d.error ?? 'สแกน Drive ส่วนตัวไม่สำเร็จ')
+      const evs: string[] = d.events ?? []
+      const list: SyncFile[] = ((d.files ?? []) as [string, string, number, string][]).map(
+        ([id, name, e, date]) => ({ id, name, eventName: evs[e] ?? '', eventDate: date ?? '' })
+      )
+      filesRef.current = list
+      setTotalFiles(list.length)
+      const skipped = (d.alreadyPublic ?? 0) + (d.alreadyPrivate ?? 0)
+      if (skipped > 0) {
+        toast(`พบ ${Number(d.found ?? 0).toLocaleString()} รูปในบัญชี — อยู่ในระบบแล้ว ${skipped.toLocaleString()} รูป (ข้าม)`, { icon: 'ℹ️', duration: 6000 })
+      }
+      return list
+    }
+
     const params = new URLSearchParams()
     if (folderId) params.set('folderId', folderId)
     const res = await fetch(apiUrl(`/api/sync-list?${params}`))
     if (!res.ok) throw new Error('สแกนรายการรูปไม่สำเร็จ')
     const { files } = await res.json()
-    const list: { id: string; name: string }[] = files ?? []
+    const list: SyncFile[] = files ?? []
     filesRef.current = list
     setTotalFiles(list.length)
     return list
-  }, [folderId])
+  }, [folderId, syncZone])
 
   // ─── ขั้น 2: sync ทีละ batch (SSE) ───────────────────────────────
   const syncBatch = useCallback((
-    batch: { id: string; name: string }[],
+    batch: SyncFile[],
     prev: Counters,
     signal: AbortSignal,
   ): Promise<{ counters: Counters; stopped: boolean }> => {
@@ -208,8 +244,10 @@ export default function AdminPage() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            eventName,
-            eventDate,
+            // โซนส่วนตัว: ชื่อกิจกรรม/วันที่มากับแต่ละไฟล์ (จากชื่อโฟลเดอร์) ไม่ใช้ค่าที่กรอก
+            zone: syncZone,
+            eventName: syncZone === 'private' ? '' : eventName,
+            eventDate: syncZone === 'private' ? '' : eventDate,
             files: batch,
             prevProcessed: prev.processed,
             prevFaces: prev.faces,
@@ -287,7 +325,7 @@ export default function AdminPage() {
         }
       }
     })
-  }, [eventName, eventDate])
+  }, [eventName, eventDate, syncZone])
 
   // ─── Main: นับ → sync ทีละ page จนครบ ─────────────────────────────
   const handleSync = async () => {
@@ -305,9 +343,15 @@ export default function AdminPage() {
       const allFiles = await fetchFileList()
       const total = allFiles.length
       if (stopRef.current) { setPhase('stopped'); return }
-      if (total === 0) { toast('ไม่พบรูปภาพในโฟลเดอร์นี้', { icon: '⚠️' }); setPhase('idle'); return }
+      if (total === 0) {
+        toast(syncZone === 'private' ? 'ไม่มีรูปใหม่ใน Drive ส่วนตัว — ทุกรูปอยู่ในระบบแล้ว' : 'ไม่พบรูปภาพในโฟลเดอร์นี้', { icon: syncZone === 'private' ? '✅' : '⚠️' })
+        setPhase('idle')
+        return
+      }
 
-      toast.success(`พบรูปทั้งหมด ${total.toLocaleString()} รูป (รวมทุกโฟลเดอร์ย่อย) เริ่ม Sync...`)
+      toast.success(syncZone === 'private'
+        ? `พบรูปใหม่ ${total.toLocaleString()} รูป เริ่ม Sync เข้าโซนส่วนตัว...`
+        : `พบรูปทั้งหมด ${total.toLocaleString()} รูป (รวมทุกโฟลเดอร์ย่อย) เริ่ม Sync...`)
 
       // 2. Sync ทีละ batch จนครบ
       setPhase('syncing')
@@ -398,7 +442,10 @@ export default function AdminPage() {
           <h1 className="text-xl font-bold text-gray-900">จัดการระบบ</h1>
           <p className="text-gray-400 text-sm mt-0.5">Sync รูปภาพจาก Google Drive เข้าระบบ</p>
         </div>
-        <button onClick={() => { localStorage.removeItem(STORAGE_KEY); router.replace('/') }}
+        <button onClick={() => {
+            localStorage.removeItem(STORAGE_KEY)
+            fetch(apiUrl('/api/auth/unlock'), { method: 'DELETE' }).finally(() => router.replace('/'))
+          }}
           className="text-xs text-gray-400 hover:text-red-500 flex items-center gap-1 transition-colors">
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
@@ -410,6 +457,23 @@ export default function AdminPage() {
 
       {/* Main Card */}
       <div className="bg-white rounded-2xl shadow-sm border border-green-100 p-6 space-y-5">
+
+        {/* เลือกโซนที่จะ sync (ล็อกระหว่างทำงาน) */}
+        <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1">
+          {([
+            { z: 'public', label: '📁 รูปงาน (สาธารณะ)' },
+            { z: 'private', label: '🔒 Drive ส่วนตัว (ทั้งบัญชี)' },
+          ] as const).map(({ z, label }) => (
+            <button key={z} disabled={isBusy}
+              onClick={() => { if (syncZone !== z) { setSyncZone(z); handleReset() } }}
+              className={`py-2 rounded-lg text-xs sm:text-sm font-semibold transition-colors disabled:cursor-not-allowed
+                ${syncZone === z
+                  ? (z === 'private' ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-green-700 shadow-sm')
+                  : 'text-gray-500 hover:text-gray-700'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
 
         {/* Icon + title */}
         <div className="text-center space-y-1">
@@ -438,15 +502,19 @@ export default function AdminPage() {
              phase === 'counting' ? 'กำลังนับรูปทั้งหมด...' :
              phase === 'syncing' ? 'กำลัง Sync รูปภาพ...' :
              phase === 'stopped' ? 'หยุด Sync แล้ว' :
-             'Sync รูปทั้งหมดจาก Drive'}
+             syncZone === 'private' ? 'Sync Drive ส่วนตัวทั้งบัญชี' : 'Sync รูปทั้งหมดจาก Drive'}
           </h2>
 
           <p className="text-gray-400 text-sm">
-            {phase === 'counting' && 'กำลังนับจำนวนรูปทั้งหมดในโฟลเดอร์...'}
+            {phase === 'counting' && (syncZone === 'private'
+              ? 'กำลังสแกนทุกโฟลเดอร์ในบัญชี Drive ส่วนตัว... (ประมาณ 1-2 นาที)'
+              : 'กำลังนับจำนวนรูปทั้งหมดในโฟลเดอร์...')}
             {phase === 'syncing' && totalFiles > 0 && `${counters.processed.toLocaleString()} / ${totalFiles.toLocaleString()} รูป`}
             {phase === 'done' && `${counters.processed.toLocaleString()} รูป | ${counters.faces.toLocaleString()} ใบหน้า | ใช้เวลา ${fmtDuration(elapsed)}`}
             {phase === 'stopped' && `ประมวลผลไป ${counters.processed.toLocaleString()} / ${totalFiles.toLocaleString()} รูป`}
-            {phase === 'idle' && 'ระบบจะดึงทุกรูปจนครบ ไม่จำกัดจำนวน กดครั้งเดียวรอได้เลย'}
+            {phase === 'idle' && (syncZone === 'private'
+              ? 'ดึงทุกรูปจากทุกโฟลเดอร์ของบัญชีส่วนตัว • ตั้งชื่อกิจกรรมจากชื่อโฟลเดอร์ให้อัตโนมัติ • เห็นได้เฉพาะผู้ที่ใส่รหัส'
+              : 'ระบบจะดึงทุกรูปจนครบ ไม่จำกัดจำนวน กดครั้งเดียวรอได้เลย')}
           </p>
         </div>
 
@@ -505,8 +573,8 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* Settings toggle */}
-        {phase === 'idle' && (
+        {/* Settings toggle (เฉพาะโซนสาธารณะ — โซนส่วนตัวไม่ต้องตั้งค่าอะไร) */}
+        {phase === 'idle' && syncZone === 'public' && (
           <button onClick={() => setShowSettings(v => !v)}
             className="w-full flex items-center justify-between text-sm text-gray-500 hover:text-gray-700
               py-2 px-3 rounded-lg hover:bg-gray-50 transition-colors">
@@ -525,7 +593,7 @@ export default function AdminPage() {
           </button>
         )}
 
-        {showSettings && phase === 'idle' && (
+        {showSettings && phase === 'idle' && syncZone === 'public' && (
           <div className="space-y-3 pt-1 border-t border-gray-100">
             <div>
               <label className="text-xs font-medium text-gray-600 block mb-1">
@@ -572,7 +640,7 @@ export default function AdminPage() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
               </svg>
-              {phase === 'stopped' ? 'Sync ต่อ (รูปที่เหลือ)' : 'Sync ทุกรูปจาก Drive'}
+              {phase === 'stopped' ? 'Sync ต่อ (รูปที่เหลือ)' : syncZone === 'private' ? 'Sync Drive ส่วนตัวทั้งหมด' : 'Sync ทุกรูปจาก Drive'}
             </button>
           ) : phase === 'done' ? (
             <button onClick={handleReset}

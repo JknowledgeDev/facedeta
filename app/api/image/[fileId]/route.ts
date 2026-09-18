@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { downloadFileAsBuffer, getThumbnailBuffer } from '@/lib/drive'
 import { toJpegBuffer } from '@/lib/image-utils'
 import { cacheTierInBackground, findCachedUrl, toFullJpeg, THUMB_SIZE, type Tier } from '@/lib/thumbs'
+import { isFileIndexed } from '@/lib/supabase'
 
 export const runtime = 'nodejs'
 
@@ -48,6 +49,12 @@ export async function GET(
           'Cache-Control': 'public, max-age=86400, s-maxage=31536000',
         },
       })
+    }
+
+    // รูปของโซนส่วนตัวห้ามออกทาง proxy สาธารณะเด็ดขาด — บัญชีแอปอาจเข้าถึงไฟล์เดียวกันใน Drive ได้
+    // (โฟลเดอร์ถูกแชร์ทั้งสองบัญชี) ถ้าปล่อยผ่าน จะถูกเสิร์ฟ + cache ลง bucket สาธารณะ
+    if (await isFileIndexed(fileId, 'private')) {
+      return NextResponse.json({ error: 'File not found' }, { status: 404, headers: { 'Cache-Control': 'no-store' } })
     }
 
     // ── 2) ยังไม่มีสำเนา (รูปเก่าที่ยังไม่ backfill): ดึงจาก Google Drive แล้วเติม cache

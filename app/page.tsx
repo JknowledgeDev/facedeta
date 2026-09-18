@@ -9,6 +9,7 @@ import ThresholdSlider from '@/components/ThresholdSlider'
 import { type SearchResult } from '@/lib/supabase'
 import { apiUrl } from '@/lib/api-url'
 import { compressIfNeeded } from '@/lib/client-compress'
+import { useUnlocked } from '@/lib/use-unlocked'
 
 type Status = 'idle' | 'searching' | 'done'
 
@@ -22,6 +23,9 @@ export default function SearchPage() {
   const [probeWarnings, setProbeWarnings] = useState<string[]>([])
   const [hiddenIds, setHiddenIds] = useState<Set<string>>(() => new Set())
   const [showMaybe, setShowMaybe] = useState(false)
+  // โซนส่วนตัว: โชว์สวิตช์เฉพาะผู้ที่ใส่รหัสแล้ว (server ตรวจ cookie ซ้ำตอนค้นจริง)
+  const unlocked = useUnlocked()
+  const [includePrivate, setIncludePrivate] = useState(true)
 
   const handleSearch = async () => {
     if (!selectedFile) {
@@ -45,6 +49,7 @@ export default function SearchPage() {
         form.append(`image${i}`, compressed, allFiles[i].name)
       }
       form.append('threshold', String(threshold))
+      if (unlocked && includePrivate) form.append('includePrivate', '1')
 
       const res = await fetch(apiUrl('/api/search'), { method: 'POST', body: form })
 
@@ -214,6 +219,18 @@ export default function SearchPage() {
         </div>
 
         <ThresholdSlider value={threshold} onChange={setThreshold} />
+
+        {unlocked && (
+          <label className="flex items-center justify-between gap-3 rounded-xl bg-gray-800 text-white px-4 py-3 cursor-pointer select-none">
+            <span className="text-sm font-medium flex items-center gap-2">
+              🔒 ค้นในโซนภาพส่วนตัวด้วย
+              <span className="text-[11px] font-normal text-gray-300 hidden sm:inline">(เห็นเฉพาะผู้ที่ใส่รหัส)</span>
+            </span>
+            <input type="checkbox" checked={includePrivate}
+              onChange={(e) => setIncludePrivate(e.target.checked)}
+              className="w-5 h-5 accent-green-500" />
+          </label>
+        )}
 
         <button
           onClick={handleSearch}

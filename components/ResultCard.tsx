@@ -3,7 +3,8 @@
 import { useState } from 'react'
 import { type SearchResult } from '@/lib/supabase'
 import SmartImg from '@/components/SmartImg'
-import { displayCdnUrl } from '@/lib/thumb-url'
+import { displayCdnUrl, privateImageUrl, privateDownloadUrl } from '@/lib/thumb-url'
+import type { Zone } from '@/lib/zone'
 
 interface ResultCardProps {
   result: SearchResult
@@ -42,7 +43,7 @@ function ConfidenceBadge({ value, verified }: { value: number; verified?: boolea
 }
 
 /** crop ใบหน้าที่ match — ให้ผู้ปกครองรู้ว่า match ใครในรูปหมู่ */
-function FaceCrop({ fileId, bbox }: { fileId: string; bbox: NonNullable<SearchResult['bbox']> }) {
+function FaceCrop({ fileId, bbox, zone }: { fileId: string; bbox: NonNullable<SearchResult['bbox']>; zone: Zone }) {
   if (bbox.width <= 0 || bbox.height <= 0) return null
   // ขยาย bbox เล็กน้อยให้เห็นทั้งหน้า
   const pad = 0.35
@@ -55,7 +56,7 @@ function FaceCrop({ fileId, bbox }: { fileId: string; bbox: NonNullable<SearchRe
       className="w-10 h-10 rounded-full border-2 border-white shadow-md bg-gray-200 bg-no-repeat shrink-0"
       title="ใบหน้าที่ระบบจับคู่ได้"
       style={{
-        backgroundImage: `url(${displayCdnUrl(fileId)})`,
+        backgroundImage: `url(${zone === 'private' ? privateImageUrl(fileId, 'display') : displayCdnUrl(fileId)})`,
         backgroundSize: `${100 / w}% ${100 / h}%`,
         backgroundPosition: `${(l / (1 - w || 1)) * 100}% ${(t / (1 - h || 1)) * 100}%`,
       }}
@@ -67,9 +68,16 @@ export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
   const [showWhy, setShowWhy] = useState(false)
   // ไฟล์ถูกลบ/ย้าย/ยกเลิกแชร์ใน Drive → แสดงรูปไม่ได้
   const [missing, setMissing] = useState(false)
-  const fullSrc = `/api/image/${result.drive_file_id}?w=1600`
+  const zone: Zone = result.zone ?? 'public'
+  const isPrivate = zone === 'private'
   const dlName = result.file_name ?? `photo_${result.drive_file_id.slice(0, 8)}`
-  const downloadSrc = `/api/image/${result.drive_file_id}?download=1&name=${encodeURIComponent(dlName)}`
+  // โซนส่วนตัว: ทุก URL ผ่าน API ที่ตรวจรหัสผู้ดูแล
+  const fullSrc = isPrivate
+    ? privateImageUrl(result.drive_file_id, 'display')
+    : `/api/image/${result.drive_file_id}?w=1600`
+  const downloadSrc = isPrivate
+    ? privateDownloadUrl(result.drive_file_id, dlName)
+    : `/api/image/${result.drive_file_id}?download=1&name=${encodeURIComponent(dlName)}`
   const lv = confidenceLevel(result.confidence)
 
   const formattedDate = result.event_date
@@ -99,6 +107,7 @@ export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
           <div className="relative aspect-square bg-gray-100 overflow-hidden">
             <SmartImg
               fileId={result.drive_file_id}
+              zone={zone}
               width={600}
               alt={result.file_name ?? 'Photo'}
               className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
@@ -106,7 +115,7 @@ export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
               onAllFailed={() => setMissing(true)}
             />
             <div className="absolute top-2 left-2 right-2 flex justify-between items-start">
-              {result.bbox ? <FaceCrop fileId={result.drive_file_id} bbox={result.bbox} /> : <span />}
+              {result.bbox ? <FaceCrop fileId={result.drive_file_id} bbox={result.bbox} zone={zone} /> : <span />}
               <ConfidenceBadge value={result.confidence} verified={result.verified} />
             </div>
           </div>
@@ -122,6 +131,11 @@ export default function ResultCard({ result, onNotMatch }: ResultCardProps) {
                 d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a2 2 0 012-2z" />
             </svg>
             <p className="text-xs font-semibold text-blue-600 truncate">{result.event_name}</p>
+            {isPrivate && (
+              <span className="shrink-0 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-gray-800 text-white" title="ภาพจากโซนส่วนตัว — เห็นเฉพาะผู้ที่ใส่รหัส">
+                🔒 ส่วนตัว
+              </span>
+            )}
           </div>
         )}
 

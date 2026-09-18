@@ -2,8 +2,8 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
+import { apiUrl } from '@/lib/api-url'
 
-const SECRET = 'Jknowledge'
 export const STORAGE_KEY = 'fd_admin_unlocked'
 
 export default function AdminModal() {
@@ -13,6 +13,7 @@ export default function AdminModal() {
   const [error, setError] = useState(false)
   const [shake, setShake] = useState(false)
   const [showPw, setShowPw] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   const openModal = () => {
@@ -22,9 +23,23 @@ export default function AdminModal() {
     setTimeout(() => inputRef.current?.focus(), 100)
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // รหัสตรวจที่ server → ได้ cookie httpOnly (ปลดล็อกหน้าจัดการ + โซนภาพส่วนตัว)
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (password === SECRET) {
+    if (submitting) return
+    setSubmitting(true)
+    let ok = false
+    try {
+      const res = await fetch(apiUrl('/api/auth/unlock'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      ok = res.ok
+    } catch { /* network error → ถือว่าไม่ผ่าน */ }
+    setSubmitting(false)
+
+    if (ok) {
       localStorage.setItem(STORAGE_KEY, '1')
       setShowModal(false)
       router.push('/admin')
@@ -121,13 +136,13 @@ export default function AdminModal() {
 
               <button
                 type="submit"
-                disabled={!password}
+                disabled={!password || submitting}
                 className="w-full py-3.5 bg-gradient-to-r from-green-600 to-emerald-600
                   hover:from-green-700 hover:to-emerald-700
                   disabled:from-gray-300 disabled:to-gray-300 disabled:cursor-not-allowed
                   text-white font-semibold rounded-xl shadow-md transition-all text-sm"
               >
-                เข้าสู่หน้าจัดการ
+                {submitting ? 'กำลังตรวจสอบ...' : 'เข้าสู่หน้าจัดการ'}
               </button>
 
               <button type="button" onClick={handleClose}

@@ -1,6 +1,7 @@
 import sharp from 'sharp'
 import { getSupabaseAdmin } from '@/lib/supabase'
 import { toJpegBuffer } from '@/lib/image-utils'
+import type { Zone } from '@/lib/zone'
 
 /**
  * สำเนารูปใน Supabase Storage (public, เสิร์ฟผ่าน CDN) — "ที่เก็บรูปจริง" ของระบบ
@@ -22,6 +23,36 @@ export type Tier = 'thumb' | 'display' | 'original'
 
 const BASE = process.env.NEXT_PUBLIC_SUPABASE_URL ?? ''
 const BUCKET_OF: Record<Tier, string> = { thumb: THUMB_BUCKET, display: PHOTO_BUCKET, original: ORIGINAL_BUCKET }
+
+/**
+ * โซนส่วนตัว: bucket แยกและ "ไม่ public" — เข้าถึงได้ผ่าน signed URL อายุสั้นเท่านั้น
+ * (ออกให้หลังตรวจรหัสผู้ดูแลฝั่ง server)
+ */
+const PRIVATE_BUCKET_OF: Record<Tier, string> = {
+  thumb: 'private-thumbs',
+  display: 'private-photos',
+  original: 'private-originals',
+}
+
+export function bucketsOf(zone: Zone): string[] {
+  const m = zone === 'private' ? PRIVATE_BUCKET_OF : BUCKET_OF
+  return [m.original, m.display, m.thumb]
+}
+
+let privateBucketsReady: Promise<void> | null = null
+/** สร้าง bucket ส่วนตัว (non-public) ถ้ายังไม่มี — ทำครั้งเดียวต่อ instance */
+function ensurePrivateBuckets(): Promise<void> {
+  if (!privateBucketsReady) {
+    privateBucketsReady = (async () => {
+      const supabase = getSupabaseAdmin()
+      for (const b of Object.values(PRIVATE_BUCKET_OF)) {
+        const { error } = await supabase.storage.createBucket(b, { public: false })
+        if (error && !/already exists/i.test(error.message)) throw new Error(`createBucket ${b}: ${error.message}`)
+      }
+    })().catch((e) => { privateBucketsReady = null; throw e })
+  }
+  return privateBucketsReady
+}
 
 export function publicUrl(bucket: string, driveFileId: string): string {
   return `${BASE}/storage/v1/object/public/${bucket}/${driveFileId}.jpg`
@@ -80,15 +111,21 @@ export async function cacheAllSizes(driveFileId: string, original: Buffer): Prom
  * เหมือน cacheAllSizes แต่ถ้า "อัพโหลด" ล้ม ไม่ throw (flow sync/upload เดินต่อได้)
  * ถ้า "แปลงภาพ" ไม่ได้จะ throw (ไฟล์เสีย — ควรนับเป็น error)
  */
-export async function cacheAllSizesSafe(driveFileId: string, original: Buffer): Promise<Buffer> {
+export async function cacheAllSizesSafe(
+  driveFileId: string,
+  original: Buffer,
+  zone: Zone = 'public'
+): Promise<Buffer> {
   const full = await toFullJpeg(original)
   try {
     const display = await deriveDisplay(full)
     const thumb = await deriveThumb(display)
+    const b = zone === 'private' ? PRIVATE_BUCKET_OF : BUCKET_OF
+    if (zone === 'private') await ensurePrivateBuckets()
     await Promise.all([
-      putObject(ORIGINAL_BUCKET, driveFileId, full),
-      putObject(PHOTO_BUCKET, driveFileId, display),
-      putObject(THUMB_BUCKET, driveFileId, thumb),
+      putObject(b.original, driveFileId, full),
+      putObject(b.display, driveFileId, display),
+      putObject(b.thumb, driveFileId, thumb),
     ])
   } catch (e) {
     console.warn(`cache skip ${driveFileId}:`, e instanceof Error ? e.message : e)
@@ -129,4 +166,37 @@ export async function findCachedUrl(driveFileId: string, tier: Tier): Promise<st
     if (await exists(b, driveFileId)) return publicUrl(b, driveFileId)
   }
   return null
+}
+
+const PRIVATE_TIER_ORDER: Record<Tier, Tier[]> = {
+  original: ['original', 'display', 'thumb'],
+  display: ['display', 'original', 'thumb'],
+  thumb: ['thumb', 'display', 'original'],
+}
+
+/**
+ * signed URL (อายุ 1 ชม.) ของรูปโซนส่วนตัว — ถ้าระดับที่ขอไม่มี ลองระดับใกล้เคียง
+ * คืน null ถ้าไม่มีสำเนาเลย
+ */
+export async function privateSignedUrl(
+  driveFileId: string,
+  tier: Tier,
+  downloadName?: string
+): Promise<string | null> {
+  const supabase = getSupabaseAdmin()
+  for (const t of PRIVATE_TIER_ORDER[tier]) {
+    const { data, error } = await supabase.storage
+      .from(PRIVATE_BUCKET_OF[t])
+      .createSignedUrl(`${driveFileId}.jpg`, 3600, downloadName ? { download: downloadName } : undefined)
+    if (!error && data?.signedUrl) return data.signedUrl
+  }
+  return null
+}
+
+/** ดึงไฟล์รูปโซนส่วนตัวเป็น Buffer (ใช้ยืนยันใบหน้าซ้ำตอนค้นหา) */
+export async function downloadPrivateObject(driveFileId: string, tier: Tier): Promise<Buffer | null> {
+  const supabase = getSupabaseAdmin()
+  const { data, error } = await supabase.storage.from(PRIVATE_BUCKET_OF[tier]).download(`${driveFileId}.jpg`)
+  if (error || !data) return null
+  return Buffer.from(await data.arrayBuffer())
 }

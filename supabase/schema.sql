@@ -71,3 +71,22 @@ SELECT
   (SELECT COUNT(*) FROM photo_index WHERE NOT has_face) AS total_photos_no_face,
   (SELECT COUNT(DISTINCT event_name) FROM photo_index WHERE event_name IS NOT NULL) AS total_events,
   (SELECT COUNT(*) FROM search_log) AS total_searches;
+
+-- ─── โซนส่วนตัว (private zone) ──────────────────────────────────────────────
+-- mapping faceId (Rekognition collection "facedeta-private") ↔ ไฟล์ใน Drive บัญชีส่วนตัว
+-- แยกตารางจาก face_index โดยสิ้นเชิง → query ฝั่งสาธารณะไม่มีทางเห็นแถวเหล่านี้
+CREATE TABLE IF NOT EXISTS private_face_index (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  face_id TEXT NOT NULL UNIQUE,
+  drive_file_id TEXT NOT NULL,
+  file_name TEXT,
+  event_name TEXT,
+  event_date DATE,
+  thumbnail_url TEXT,
+  uploaded_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_private_drive_file_id ON private_face_index(drive_file_id);
+CREATE INDEX IF NOT EXISTS idx_private_event_name ON private_face_index(event_name);
+CREATE INDEX IF NOT EXISTS idx_private_uploaded_at ON private_face_index(uploaded_at DESC);
+-- RLS เปิดโดยไม่มี policy = anon key อ่าน/เขียนไม่ได้ (service role ข้าม RLS)
+ALTER TABLE private_face_index ENABLE ROW LEVEL SECURITY;

@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { deleteFaceMappingsByFileId, getSupabaseAdmin } from '@/lib/supabase'
-import { deleteFacesFromList } from '@/lib/azure-face'
-import { ORIGINAL_BUCKET, PHOTO_BUCKET, THUMB_BUCKET } from '@/lib/thumbs'
+import { deleteFacesFromList, collectionOf } from '@/lib/azure-face'
+import { bucketsOf } from '@/lib/thumbs'
+import { isUnlocked } from '@/lib/auth'
+import { parseZone } from '@/lib/zone'
 
 export const runtime = 'nodejs'
 export const maxDuration = 60
@@ -18,7 +20,11 @@ const MAX_PER_CALL = 50
  */
 export async function POST(req: NextRequest) {
   try {
-    const body = (await req.json()) as { fileIds?: unknown }
+    const body = (await req.json()) as { fileIds?: unknown; zone?: unknown }
+    const zone = parseZone(body.zone)
+    if (zone === 'private' && !isUnlocked(req)) {
+      return NextResponse.json({ error: 'กรุณาใส่รหัสผู้ดูแลก่อน' }, { status: 401 })
+    }
     const raw = Array.isArray(body.fileIds) ? body.fileIds : []
     const ids = raw.filter(
       (x): x is string => typeof x === 'string' && /^[a-zA-Z0-9_-]{10,}$/.test(x)
@@ -38,7 +44,7 @@ export async function POST(req: NextRequest) {
     await Promise.all(
       ids.map(async (id) => {
         try {
-          allFaceIds.push(...(await deleteFaceMappingsByFileId(id)))
+          allFaceIds.push(...(await deleteFaceMappingsByFileId(id, zone)))
           deleted++
         } catch (e) {
           errors.push(`db ${id}: ${e instanceof Error ? e.message : e}`)
@@ -50,7 +56,7 @@ export async function POST(req: NextRequest) {
     let facesRemoved = 0
     if (allFaceIds.length > 0) {
       try {
-        facesRemoved = await deleteFacesFromList(allFaceIds)
+        facesRemoved = await deleteFacesFromList(allFaceIds, collectionOf(zone))
       } catch (e) {
         errors.push(`rekognition: ${e instanceof Error ? e.message : e}`)
       }
@@ -60,7 +66,7 @@ export async function POST(req: NextRequest) {
     const sb = getSupabaseAdmin()
     const paths = ids.map((id) => `${id}.jpg`)
     await Promise.all(
-      [ORIGINAL_BUCKET, PHOTO_BUCKET, THUMB_BUCKET].map(async (bucket) => {
+      bucketsOf(zone).map(async (bucket) => {
         const { error } = await sb.storage.from(bucket).remove(paths)
         if (error) errors.push(`storage ${bucket}: ${error.message}`)
       })

@@ -15,3 +15,13 @@ export function displayCdnUrl(driveFileId: string): string {
 export function thumbProxyUrl(driveFileId: string, width = 500): string {
   return `/api/image/${driveFileId}?w=${width}`
 }
+
+// ─── โซนส่วนตัว: ทุก URL ผ่าน API ที่ตรวจ cookie ผู้ดูแล (ไม่มี URL สาธารณะ) ───
+
+export function privateImageUrl(driveFileId: string, tier: 'thumb' | 'display'): string {
+  return `/api/private/image/${driveFileId}?tier=${tier}`
+}
+
+export function privateDownloadUrl(driveFileId: string, name: string): string {
+  return `/api/private/image/${driveFileId}?download=1&name=${encodeURIComponent(name)}`
+}

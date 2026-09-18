@@ -25,6 +25,7 @@ import {
 } from '@aws-sdk/client-rekognition'
 import sharp from 'sharp'
 import { toJpegBuffer, AWS_MAX_BYTES } from '@/lib/image-utils'
+import type { Zone } from '@/lib/zone'
 
 const client = new RekognitionClient({
   region: process.env.AWS_REGION ?? 'ap-southeast-1',
@@ -35,19 +36,29 @@ const client = new RekognitionClient({
 })
 
 const COLLECTION_ID = process.env.REKOGNITION_COLLECTION_ID ?? 'facedeta-collection'
+/** คลังใบหน้าของโซนส่วนตัว — แยกจากคลังสาธารณะโดยสิ้นเชิง (ค้นข้ามกันไม่ได้) */
+const PRIVATE_COLLECTION_ID = process.env.REKOGNITION_PRIVATE_COLLECTION_ID ?? 'facedeta-private'
+
+export function collectionOf(zone: Zone): string {
+  return zone === 'private' ? PRIVATE_COLLECTION_ID : COLLECTION_ID
+}
 
 // ─── Collection ──────────────────────────────────────────────────────────────
 
 /** สร้าง Rekognition Collection ถ้ายังไม่มี (409 = already exists → ข้าม) */
-export async function ensureFaceList(): Promise<void> {
+const ensuredCollections = new Set<string>()
+
+export async function ensureFaceList(collectionId: string = COLLECTION_ID): Promise<void> {
+  if (ensuredCollections.has(collectionId)) return
   try {
-    await client.send(new CreateCollectionCommand({ CollectionId: COLLECTION_ID }))
+    await client.send(new CreateCollectionCommand({ CollectionId: collectionId }))
   } catch (err: unknown) {
     if ((err as { name?: string }).name !== 'ResourceAlreadyExistsException') {
       throw err
     }
     // collection มีอยู่แล้ว → ข้าม
   }
+  ensuredCollections.add(collectionId)
 }
 
 /**
@@ -76,9 +87,10 @@ export interface AddFaceResult {
  */
 export async function addFaceToList(
   imageBuffer: Buffer,
-  userData?: string
+  userData?: string,
+  collectionId: string = COLLECTION_ID
 ): Promise<AddFaceResult[]> {
-  await ensureFaceList()
+  await ensureFaceList(collectionId)
 
   // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG + บีบให้ต่ำกว่า AWS 5 MB limit
   const jpegBuffer = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
@@ -90,7 +102,7 @@ export async function addFaceToList(
 
   const response = await client.send(
     new IndexFacesCommand({
-      CollectionId: COLLECTION_ID,
+      CollectionId: collectionId,
       Image: { Bytes: jpegBuffer },
       ExternalImageId: externalImageId,
       DetectionAttributes: [],
@@ -137,7 +149,7 @@ export async function addFaceToList(
   if (badIds.length > 0) {
     // ลบหน้าที่ไม่ผ่านออกจาก collection (best-effort)
     try {
-      await client.send(new DeleteFacesCommand({ CollectionId: COLLECTION_ID, FaceIds: badIds }))
+      await client.send(new DeleteFacesCommand({ CollectionId: collectionId, FaceIds: badIds }))
     } catch (e) {
       console.warn('index-gate cleanup failed:', e instanceof Error ? e.message : e)
     }
@@ -263,17 +275,18 @@ export async function findSimilarFaces(
  */
 export async function searchFacesByImage(
   imageBuffer: Buffer,
-  threshold = 0.6
+  threshold = 0.6,
+  collectionId: string = COLLECTION_ID
 ): Promise<SimilarFace[]> {
   // สร้าง collection อัตโนมัติถ้ายังไม่มี
-  await ensureFaceList()
+  await ensureFaceList(collectionId)
 
   // แปลง HEIC/HEIF และฟอร์แมตอื่นๆ → JPEG + บีบให้ต่ำกว่า AWS 5 MB limit
   const jpegBuffer = await toJpegBuffer(imageBuffer, 0, AWS_MAX_BYTES)
 
   const response = await client.send(
     new SearchFacesByImageCommand({
-      CollectionId: COLLECTION_ID,
+      CollectionId: collectionId,
       Image: { Bytes: jpegBuffer },
       FaceMatchThreshold: threshold * 100, // AWS รับ 0–100
       MaxFaces: 100,
@@ -301,12 +314,15 @@ export async function searchFacesByImage(
 }
 
 /** ลบหลายใบหน้าออกจาก Collection (chunk ละ 1000) — คืนจำนวนที่ลบสำเร็จ */
-export async function deleteFacesFromList(faceIds: string[]): Promise<number> {
+export async function deleteFacesFromList(
+  faceIds: string[],
+  collectionId: string = COLLECTION_ID
+): Promise<number> {
   let removed = 0
   for (let i = 0; i < faceIds.length; i += 1000) {
     const chunk = faceIds.slice(i, i + 1000)
     const res = await client.send(
-      new DeleteFacesCommand({ CollectionId: COLLECTION_ID, FaceIds: chunk })
+      new DeleteFacesCommand({ CollectionId: collectionId, FaceIds: chunk })
     )
     removed += res.DeletedFaces?.length ?? chunk.length
   }

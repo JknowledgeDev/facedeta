@@ -2,19 +2,30 @@ import { google } from 'googleapis'
 
 const FOLDER_ID = process.env.GOOGLE_DRIVE_FOLDER_ID!
 
-function getAuthClient() {
+/**
+ * บัญชี Drive ที่ระบบเชื่อมอยู่:
+ *  - app     : บัญชีแอป (โซนสาธารณะ — โฟลเดอร์งานที่แชร์มา)
+ *  - private : บัญชีโซนส่วนตัว (กวาดทั้งบัญชี, สิทธิ์อ่านอย่างเดียว)
+ */
+export type DriveAccount = 'app' | 'private'
+
+function getAuthClient(account: DriveAccount = 'app') {
   const auth = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET
   )
-  auth.setCredentials({
-    refresh_token: process.env.GOOGLE_REFRESH_TOKEN,
-  })
+  const refreshToken = account === 'private'
+    ? process.env.PRIVATE_GOOGLE_REFRESH_TOKEN
+    : process.env.GOOGLE_REFRESH_TOKEN
+  if (account === 'private' && !refreshToken) {
+    throw new Error('ยังไม่ได้ตั้งค่า PRIVATE_GOOGLE_REFRESH_TOKEN (บัญชี Drive โซนส่วนตัว)')
+  }
+  auth.setCredentials({ refresh_token: refreshToken })
   return auth
 }
 
-function getDriveClient() {
-  return google.drive({ version: 'v3', auth: getAuthClient() })
+function getDriveClient(account: DriveAccount = 'app') {
+  return google.drive({ version: 'v3', auth: getAuthClient(account) })
 }
 
 /**
@@ -264,10 +275,10 @@ export async function countImagesInFolder(folderId?: string): Promise<number> {
 }
 
 // ดาวน์โหลดรูปภาพเป็น Buffer
-export async function downloadFileAsBuffer(fileId: string): Promise<Buffer> {
-  const drive = getDriveClient()
+export async function downloadFileAsBuffer(fileId: string, account: DriveAccount = 'app'): Promise<Buffer> {
+  const drive = getDriveClient(account)
   const response = await drive.files.get(
-    { fileId, alt: 'media' },
+    { fileId, alt: 'media', supportsAllDrives: true },
     { responseType: 'arraybuffer' }
   )
   return Buffer.from(response.data as ArrayBuffer)
@@ -328,4 +339,100 @@ export async function getFileMetadata(fileId: string): Promise<DriveFile> {
     fields: 'id, name, mimeType, createdTime, thumbnailLink, webViewLink',
   })
   return response.data as DriveFile
+}
+
+// ─── โซนส่วนตัว: กวาดรูป "ทั้งบัญชี" ────────────────────────────────────────
+
+export interface PrivateDriveImage {
+  id: string
+  name: string
+  /** ชื่อกิจกรรมอัตโนมัติจากโฟลเดอร์: "โฟลเดอร์หลัก" หรือ "โฟลเดอร์หลัก › โฟลเดอร์ย่อย" */
+  eventName: string
+  /** วันที่ไทย "YYYY-MM-DD" จากเวลาไฟล์ (ค่าที่เก่ากว่าระหว่างสร้าง/แก้ไข ≈ วันถ่าย) */
+  eventDate: string
+}
+
+const RAW_EXT = /\.(cr3|cr2|arw|rw2|nef|dng)$/i
+
+/**
+ * ดึงรูปทุกไฟล์ที่บัญชีโซนส่วนตัวมองเห็น (My Drive + แชร์กับฉัน + shared drives)
+ * ใช้ query ระดับทั้งบัญชี (ไม่เดินทีละโฟลเดอร์) — โฟลเดอร์กับรูปดึงขนานกัน
+ * หมายเหตุ: ห้ามใส่ orderBy / imageMediaMetadata (Drive จะตัดผลลัพธ์ที่ ~2,000)
+ */
+export async function listPrivateDriveImages(): Promise<PrivateDriveImage[]> {
+  const drive = getDriveClient('private')
+
+  type F = {
+    id?: string | null
+    name?: string | null
+    mimeType?: string | null
+    parents?: string[] | null
+    createdTime?: string | null
+    modifiedTime?: string | null
+  }
+  async function listAll(q: string, fields: string): Promise<F[]> {
+    const out: F[] = []
+    let pageToken: string | undefined
+    do {
+      const res = await drive.files.list({
+        q,
+        fields: `nextPageToken, files(${fields})`,
+        pageSize: 1000,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+        corpora: 'allDrives',
+      })
+      out.push(...((res.data.files ?? []) as F[]))
+      pageToken = res.data.nextPageToken ?? undefined
+    } while (pageToken)
+    return out
+  }
+
+  const [folders, files] = await Promise.all([
+    listAll("mimeType = 'application/vnd.google-apps.folder' and trashed = false", 'id,name,parents'),
+    listAll(
+      "(mimeType contains 'image/' or name contains '.cr3' or name contains '.CR3') and trashed = false",
+      'id,name,mimeType,parents,createdTime,modifiedTime'
+    ),
+  ])
+
+  const fmap = new Map<string, F>()
+  for (const f of folders) if (f.id) fmap.set(f.id, f)
+
+  const eventNameOf = (f: F): string => {
+    const parentId = f.parents?.[0]
+    const parent = parentId ? fmap.get(parentId) : undefined
+    if (!parent) return 'ไม่ระบุโฟลเดอร์'
+    // ไต่ขึ้นไปจนสุดสายที่มองเห็น = โฟลเดอร์หลัก
+    let top = parent
+    for (let guard = 0; guard < 50; guard++) {
+      const upId = top.parents?.[0]
+      const up = upId ? fmap.get(upId) : undefined
+      if (!up) break
+      top = up
+    }
+    const topName = (top.name ?? '').trim() || 'ไม่ระบุโฟลเดอร์'
+    const parentName = (parent.name ?? '').trim()
+    return top === parent || !parentName ? topName : `${topName} › ${parentName}`
+  }
+
+  const seen = new Set<string>()
+  const out: PrivateDriveImage[] = []
+  for (const f of files) {
+    if (!f.id || seen.has(f.id)) continue
+    const name = f.name ?? ''
+    if (name.startsWith('._')) continue // ไฟล์ขยะ macOS
+    // query ด้านบนคืนไฟล์อื่นติดมาด้วย (วิดีโอ/PDF) → รับเฉพาะรูปจริง
+    if (!(f.mimeType ?? '').startsWith('image/') && !RAW_EXT.test(name)) continue
+    seen.add(f.id)
+    const times = [f.createdTime, f.modifiedTime].filter((t): t is string => !!t).sort()
+    out.push({
+      id: f.id,
+      name,
+      eventName: eventNameOf(f),
+      eventDate: times[0] ? toThaiDateString(times[0]) : '',
+    })
+  }
+  return out
 }

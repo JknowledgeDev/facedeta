@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
 import SmartImg from '@/components/SmartImg'
 import { apiUrl } from '@/lib/api-url'
+import type { Zone } from '@/lib/zone'
 
 interface AdminPhoto {
   id: string
@@ -39,11 +40,12 @@ export default function PhotoManager({ onChanged }: { onChanged?: () => void }) 
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [visible, setVisible] = useState(PAGE)
   const [deleting, setDeleting] = useState<{ done: number; total: number } | null>(null)
+  const [zone, setZone] = useState<Zone>('public')
 
-  const load = async () => {
+  const load = async (z: Zone = zone) => {
     setLoading(true)
     try {
-      const res = await fetch(apiUrl('/api/admin/photos'))
+      const res = await fetch(apiUrl(`/api/admin/photos?zone=${z}`), { cache: 'no-store' })
       if (!res.ok) throw new Error('โหลดรายการรูปไม่สำเร็จ')
       const d = await res.json()
       const evs: string[] = d.events ?? []
@@ -65,6 +67,16 @@ export default function PhotoManager({ onChanged }: { onChanged?: () => void }) 
     if (open && !loaded && !loading) load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
+
+  const switchZone = (z: Zone) => {
+    if (z === zone || deleting) return
+    setZone(z)
+    setPhotos([])
+    setSelected(new Set())
+    setFilter('')
+    setVisible(PAGE)
+    load(z)
+  }
 
   // รายชื่อกิจกรรม + จำนวนรูป (สำหรับ dropdown กรอง)
   const events = useMemo(() => {
@@ -114,7 +126,7 @@ export default function PhotoManager({ onChanged }: { onChanged?: () => void }) 
         const res = await fetch(apiUrl('/api/admin/delete-photos'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ fileIds: batch }),
+          body: JSON.stringify({ fileIds: batch, zone }),
         })
         const d = await res.json()
         if (!res.ok) throw new Error(d.error ?? 'ลบไม่สำเร็จ')
@@ -170,6 +182,24 @@ export default function PhotoManager({ onChanged }: { onChanged?: () => void }) 
             </div>
           ) : (
             <>
+              {/* เลือกโซน */}
+              <div className="px-5 pt-3">
+                <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1">
+                  {([
+                    { z: 'public', label: '📁 รูปงาน (สาธารณะ)' },
+                    { z: 'private', label: '🔒 โซนส่วนตัว' },
+                  ] as const).map(({ z, label }) => (
+                    <button key={z} onClick={() => switchZone(z)} disabled={!!deleting}
+                      className={`py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:cursor-not-allowed
+                        ${zone === z
+                          ? (z === 'private' ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-green-700 shadow-sm')
+                          : 'text-gray-500 hover:text-gray-700'}`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               {/* แถบควบคุม */}
               <div className="px-5 py-3 flex flex-wrap items-center gap-2 border-b border-gray-50 sticky top-0 bg-white z-10">
                 <select value={filter}
@@ -234,7 +264,7 @@ export default function PhotoManager({ onChanged }: { onChanged?: () => void }) 
                             title={`${p.name}${p.event ? ` • ${p.event}` : ''}`}
                             className={`relative aspect-square rounded-lg overflow-hidden bg-gray-100 group
                               ${isSel ? 'ring-2 ring-red-500 ring-offset-1' : 'hover:opacity-90'}`}>
-                            <SmartImg fileId={p.id} width={200} alt={p.name} loading="lazy"
+                            <SmartImg fileId={p.id} zone={zone} width={200} alt={p.name} loading="lazy"
                               className="w-full h-full object-cover" />
                             {isSel && (
                               <span className="absolute inset-0 bg-red-500/30 flex items-center justify-center">

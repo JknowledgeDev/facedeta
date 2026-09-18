@@ -4,6 +4,9 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { apiUrl } from '@/lib/api-url'
 import PhotoCalendar from '@/components/PhotoCalendar'
 import SmartImg from '@/components/SmartImg'
+import { useUnlocked } from '@/lib/use-unlocked'
+import { privateImageUrl, privateDownloadUrl } from '@/lib/thumb-url'
+import type { Zone } from '@/lib/zone'
 
 interface PhotoMeta {
   id: string
@@ -27,9 +30,11 @@ function formatThaiDate(date: string): string {
   return `${d} ${TH_MONTHS[m - 1]} ${y + 543}`
 }
 
-// ใช้ proxy ของแอป (OAuth) — ดู/ดาวน์โหลดได้ทุกคนโดยไม่ต้องตั้ง Drive เป็น public
-const fullUrl = (id: string) => `/api/image/${id}?w=1600`
-const downloadUrl = (id: string, name: string) => `/api/image/${id}?download=1&name=${encodeURIComponent(name)}`
+// โซนสาธารณะ: proxy ของแอป — ดู/ดาวน์โหลดได้ทุกคน | โซนส่วนตัว: API ที่ตรวจรหัสผู้ดูแล
+const fullUrl = (id: string, zone: Zone) =>
+  zone === 'private' ? privateImageUrl(id, 'display') : `/api/image/${id}?w=1600`
+const downloadUrl = (id: string, name: string, zone: Zone) =>
+  zone === 'private' ? privateDownloadUrl(id, name) : `/api/image/${id}?download=1&name=${encodeURIComponent(name)}`
 
 const PAGE = 60 // จำนวนรูปต่อการแสดงผลหนึ่งช่วง
 const CACHE_KEY = 'fd_manifest_v2'
@@ -67,35 +72,56 @@ export default function GalleryPage() {
 
   const sentinelRef = useRef<HTMLDivElement>(null)
 
+  // โซนส่วนตัว: สวิตช์โผล่เฉพาะผู้ที่ใส่รหัสแล้ว — ข้อมูลจริง server ตรวจ cookie ทุกครั้ง
+  const unlocked = useUnlocked()
+  const [zone, setZone] = useState<Zone>('public')
+
   // ─── โหลด manifest (รูปทั้งหมดจากทุกโฟลเดอร์ที่เคย sync) ──────────
   // stale-while-revalidate: แสดงรายการที่จำไว้ในเครื่องทันที แล้วดึงของใหม่มาแทนเบื้องหลัง
+  // (โซนส่วนตัวไม่เก็บ cache ในเครื่อง — กันข้อมูลค้างหลังออกจากระบบ)
   useEffect(() => {
+    let alive = true
     let hadCache = false
-    try {
-      const raw = localStorage.getItem(CACHE_KEY)
-      if (raw) {
-        const cached = JSON.parse(raw)
-        const list = decodeManifest(cached.data)
-        if (list.length > 0) { setManifest(list); setLoading(false); hadCache = true }
-      }
-    } catch { /* ignore */ }
+    setError(null)
+    setFilter({ kind: 'all' })
+    setBroken(new Set())
+    setLightboxIdx(null)
+
+    if (zone === 'public') {
+      try {
+        const raw = localStorage.getItem(CACHE_KEY)
+        if (raw) {
+          const cached = JSON.parse(raw)
+          const list = decodeManifest(cached.data)
+          if (list.length > 0) { setManifest(list); setLoading(false); hadCache = true }
+        }
+      } catch { /* ignore */ }
+    } else {
+      setManifest([])
+    }
 
     const load = async () => {
       if (!hadCache) setLoading(true)
       try {
-        const res = await fetch(apiUrl('/api/photo-manifest'))
+        const res = await fetch(apiUrl(zone === 'private' ? '/api/private/manifest' : '/api/photo-manifest'),
+          zone === 'private' ? { cache: 'no-store' } : undefined)
+        if (res.status === 401) throw new Error('กรุณาใส่รหัสที่ปุ่ม "จัดการระบบ" ก่อน')
         if (!res.ok) throw new Error('โหลดรูปไม่สำเร็จ')
         const data = await res.json()
+        if (!alive) return
         setManifest(decodeManifest(data))
-        try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })) } catch { /* quota */ }
+        if (zone === 'public') {
+          try { localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), data })) } catch { /* quota */ }
+        }
       } catch (err: unknown) {
-        if (!hadCache) setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
+        if (alive && !hadCache) setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาด')
       } finally {
-        setLoading(false)
+        if (alive) setLoading(false)
       }
     }
     load()
-  }, [])
+    return () => { alive = false }
+  }, [zone])
 
   // นับรูปต่อวัน (จากวันกิจกรรม)
   const days = useMemo(() => {
@@ -166,12 +192,12 @@ export default function GalleryPage() {
     const preload = (idx: number) => {
       if (idx >= 0 && idx < filtered.length) {
         const img = new window.Image()
-        img.src = fullUrl(filtered[idx].id)
+        img.src = fullUrl(filtered[idx].id, zone)
       }
     }
     preload(lightboxIdx + 1)
     preload(lightboxIdx - 1)
-  }, [lightboxIdx, filtered])
+  }, [lightboxIdx, filtered, zone])
 
   // Keyboard nav
   useEffect(() => {
@@ -206,9 +232,33 @@ export default function GalleryPage() {
           </svg>
           แกลเลอรี่รูปภาพ
         </div>
-        <h1 className="text-2xl font-bold text-gray-800">ภาพกิจกรรมทั้งหมด</h1>
-        <p className="text-gray-500 text-sm">เรียงจากรูปล่าสุด • เลือกกิจกรรมหรือวันที่เพื่อกรอง</p>
+        <h1 className="text-2xl font-bold text-gray-800">
+          {zone === 'private' ? '🔒 ภาพโซนส่วนตัว' : 'ภาพกิจกรรมทั้งหมด'}
+        </h1>
+        <p className="text-gray-500 text-sm">
+          {zone === 'private'
+            ? 'เห็นเฉพาะผู้ที่ใส่รหัส • จัดกลุ่มตามโฟลเดอร์ใน Drive'
+            : 'เรียงจากรูปล่าสุด • เลือกกิจกรรมหรือวันที่เพื่อกรอง'}
+        </p>
       </div>
+
+      {/* สวิตช์โซน — แสดงเฉพาะผู้ที่ใส่รหัสผู้ดูแลแล้ว */}
+      {unlocked && (
+        <div className="grid grid-cols-2 gap-1 bg-gray-100 rounded-xl p-1 max-w-md mx-auto">
+          {([
+            { z: 'public', label: '🌐 ภาพกิจกรรม' },
+            { z: 'private', label: '🔒 โซนส่วนตัว' },
+          ] as const).map(({ z, label }) => (
+            <button key={z} onClick={() => setZone(z)}
+              className={`py-2 rounded-lg text-sm font-semibold transition-colors
+                ${zone === z
+                  ? (z === 'private' ? 'bg-gray-800 text-white shadow-sm' : 'bg-white text-green-700 shadow-sm')
+                  : 'text-gray-500 hover:text-gray-700'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Controls */}
       <div className="bg-white rounded-2xl shadow-sm border border-green-100 p-4 space-y-3">
@@ -332,7 +382,7 @@ export default function GalleryPage() {
               className="group relative rounded-xl overflow-hidden cursor-pointer aspect-square
                 shadow-sm hover:shadow-lg transition-shadow duration-200 bg-gray-100"
               onClick={() => openLightbox(idx)}>
-              <SmartImg fileId={photo.id} width={500} alt={photo.name}
+              <SmartImg fileId={photo.id} zone={zone} width={500} alt={photo.name}
                 className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-300"
                 loading="lazy"
                 onAllFailed={() => setBroken((prev) => {
@@ -389,11 +439,11 @@ export default function GalleryPage() {
 
           <div className="relative max-w-[90vw] max-h-[90vh] flex items-center justify-center">
             {!imgLoaded && (
-              <SmartImg fileId={lightbox.id} width={500} alt="" aria-hidden
+              <SmartImg fileId={lightbox.id} zone={zone} width={500} alt="" aria-hidden
                 className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg blur-sm scale-105" />
             )}
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img key={lightbox.id} src={fullUrl(lightbox.id)} alt={lightbox.name}
+            <img key={lightbox.id} src={fullUrl(lightbox.id, zone)} alt={lightbox.name}
               onLoad={() => setImgLoaded(true)}
               className={`max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl transition-opacity duration-300 ${imgLoaded ? 'opacity-100' : 'opacity-0 absolute inset-0 m-auto'}`} />
             {!imgLoaded && (
@@ -411,7 +461,7 @@ export default function GalleryPage() {
                   </p>
                 )}
               </div>
-              <a href={downloadUrl(lightbox.id, lightbox.name)} download={lightbox.name}
+              <a href={downloadUrl(lightbox.id, lightbox.name, zone)} download={lightbox.name}
                 className="flex items-center gap-1.5 text-xs bg-white/20 hover:bg-white/35 text-white px-3 py-1.5 rounded-lg transition-colors shrink-0 ml-3"
                 onClick={(e) => e.stopPropagation()}>
                 <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
